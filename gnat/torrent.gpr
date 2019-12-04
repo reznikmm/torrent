@@ -1,0 +1,24 @@
+--  Copyright (c) 2019 Maxim Reznik <reznikmm@gmail.com>
+--
+--  SPDX-License-Identifier: MIT
+--  License-Filename: LICENSE
+-------------------------------------------------------------
+
+with "matreshka_league";
+
+project Torrent is
+
+   for Source_Dirs use ("../source");
+   for Main use ("torrent-run.adb");
+   for Object_Dir use "../.obj";
+
+   package Compiler is
+      for Default_Switches ("ada") use
+        ("-gnat12", "-gnatW8", "-g", "-gnatVa", "-gnatwea", "-gnaty", "-gnata");
+   end Compiler;
+
+   package Binder is
+      for Switches ("ada") use ("-E", "-W8");
+   end Binder;
+
+end Torrent;
