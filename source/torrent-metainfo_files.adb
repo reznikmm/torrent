@@ -6,6 +6,7 @@
 
 with Ada.Containers.Vectors;
 with Ada.Streams.Stream_IO;
+with GNAT.SHA1;
 
 with League.Stream_Element_Vectors;
 with League.Text_Codecs;
@@ -53,6 +54,15 @@ package body Torrent.Metainfo_Files is
    begin
       return Self.Files (Index).Path;
    end File_Path;
+
+   ---------------
+   -- Info_Hash --
+   ---------------
+
+   not overriding function Info_Hash (Self  : Metainfo_File) return SHA1 is
+   begin
+      return Self.Info_Hash;
+   end Info_Hash;
 
    ----------
    -- Name --
@@ -147,16 +157,20 @@ package body Torrent.Metainfo_Files is
          Files     : out File_Vectors.Vector;
          Pieces    : out League.Stream_Element_Vectors.Stream_Element_Vector);
 
+      procedure Read_Buffer;
+
       subtype Digit is Ada.Streams.Stream_Element
         range Character'Pos ('0') .. Character'Pos ('9');
 
-      Codec  : constant League.Text_Codecs.Text_Codec :=
+      Input    : Ada.Streams.Stream_IO.File_Type;
+      Buffer   : Ada.Streams.Stream_Element_Array (1 .. 1024);
+      Last     : Ada.Streams.Stream_Element_Count := 0;
+      Next     : Ada.Streams.Stream_Element_Count := 1;
+      Error    : constant String := "Can't parse torrent file.";
+      SHA_From : Ada.Streams.Stream_Element_Count := Buffer'Last + 1;
+      Context  : GNAT.SHA1.Context := GNAT.SHA1.Initial_Context;
+      Codec    : constant League.Text_Codecs.Text_Codec :=
         League.Text_Codecs.Codec (+"utf-8");
-      Input  : Ada.Streams.Stream_IO.File_Type;
-      Buffer : Ada.Streams.Stream_Element_Array (1 .. 1024);
-      Last   : Ada.Streams.Stream_Element_Count := 0;
-      Next   : Ada.Streams.Stream_Element_Count := 1;
-      Error  : constant String := "Can't parse torrent file.";
 
       package Constants is
          Announce : constant League.Strings.Universal_String := +"announce";
@@ -173,6 +187,22 @@ package body Torrent.Metainfo_Files is
            +"piece length";
       end Constants;
 
+      -----------------
+      -- Read_Buffer --
+      -----------------
+
+      procedure Read_Buffer is
+      begin
+         if SHA_From <= Last then
+            GNAT.SHA1.Update (Context, Buffer (SHA_From .. Last));
+
+            SHA_From := 1;
+         end if;
+
+         Ada.Streams.Stream_IO.Read (Input, Buffer, Last);
+         Next := 1;
+      end Read_Buffer;
+
       ------------
       -- Expect --
       ------------
@@ -180,11 +210,11 @@ package body Torrent.Metainfo_Files is
       procedure Expect (Char : Ada.Streams.Stream_Element) is
       begin
          if Buffer (Next) = Char then
+
             Next := Next + 1;
 
             if Next > Last then
-               Ada.Streams.Stream_IO.Read (Input, Buffer, Last);
-               Next := 1;
+               Read_Buffer;
             end if;
          else
             raise Constraint_Error with Error;
@@ -251,6 +281,7 @@ package body Torrent.Metainfo_Files is
          Key    : League.Strings.Universal_String;
          Length : Ada.Streams.Stream_Element_Count := 0;
       begin
+         SHA_From := Next;  --  Activate SHA1 calculation
          Expect (Character'Pos ('d'));
 
          while Buffer (Next) /= Character'Pos ('e') loop
@@ -290,6 +321,9 @@ package body Torrent.Metainfo_Files is
                Skip_Value;
             end if;
          end loop;
+
+         GNAT.SHA1.Update (Context, Buffer (SHA_From .. Next));
+         SHA_From := Buffer'Last + 1;  --  Deactivate SHA1 calculation
 
          Expect (Character'Pos ('e'));
       end Parse_Info;
@@ -357,6 +391,7 @@ package body Torrent.Metainfo_Files is
             Announce     => League.IRIs.From_Universal_String (Announce),
             Name         => Name,
             Piece_Length => Piece_Length,
+            Info_Hash    => GNAT.SHA1.Digest (Context),
             others       => <>)
          do
             for J in Result.Hashes'Range loop
@@ -396,8 +431,7 @@ package body Torrent.Metainfo_Files is
          while Last - Next + 1 <= Len loop
             Value.Append (Buffer (Next .. Last));
             Len := Len - (Last - Next + 1);
-            Ada.Streams.Stream_IO.Read (Input, Buffer, Last);
-            Next := 1;
+            Read_Buffer;
          end loop;
 
          if Len > 0 then
@@ -431,8 +465,7 @@ package body Torrent.Metainfo_Files is
                Data (To + 1 .. To + Last - Next + 1) := Buffer (Next .. Last);
                To  := To  +  Last - Next + 1;
                Len := Len - (Last - Next + 1);
-               Ada.Streams.Stream_IO.Read (Input, Buffer, Last);
-               Next := 1;
+               Read_Buffer;
             end loop;
 
             if Len > 0 then
@@ -539,8 +572,7 @@ package body Torrent.Metainfo_Files is
             while Last - Next + 1 <= Len loop
                To  := To  +  Last - Next + 1;
                Len := Len - (Last - Next + 1);
-               Ada.Streams.Stream_IO.Read (Input, Buffer, Last);
-               Next := 1;
+               Read_Buffer;
             end loop;
 
             if Len > 0 then

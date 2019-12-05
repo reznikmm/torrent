@@ -11,7 +11,6 @@ with League.String_Vectors;
 with League.Strings;
 
 package Torrent.Metainfo_Files is
-   pragma Preelaborate;
 
    type Metainfo_File (<>) is tagged private;
    --  Metainfo files also known as .torrent files
@@ -61,6 +60,9 @@ package Torrent.Metainfo_Files is
    --  A list of strings corresponding to subdirectory names, the last of
    --  which is the actual file name.
 
+   not overriding function Info_Hash (Self  : Metainfo_File) return SHA1;
+   --  The hash of the bencoded form of the info value from the metainfo file.
+
 private
 
    type SHA1_Array is array (Positive range <>) of SHA1;
@@ -80,6 +82,7 @@ private
       Announce     : League.IRIs.IRI;
       Name         : League.Strings.Universal_String;
       Piece_Length : Ada.Streams.Stream_Element_Count;
+      Info_Hash    : SHA1;
       Hashes       : SHA1_Array (1 .. Piece_Count);
       Files        : File_Information_Array (1 .. File_Count);
    end record;
