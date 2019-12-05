@@ -36,8 +36,6 @@ package Torrent.Metainfo_Files is
    not overriding function Piece_Count (Self : Metainfo_File) return Positive;
    --  Number of pieces
 
-   subtype SHA1 is Ada.Streams.Stream_Element_Array (1 .. 20);
-
    not overriding function Piece_SHA1
      (Self  : Metainfo_File;
       Index : Positive) return SHA1
