@@ -6,12 +6,17 @@
 
 with Ada.Containers.Vectors;
 with Ada.Streams.Stream_IO;
+with Ada.Unchecked_Deallocation;
+
 with GNAT.SHA1;
 
 with League.Stream_Element_Vectors;
 with League.Text_Codecs;
 
 package body Torrent.Metainfo_Files is
+
+   procedure Free is new Ada.Unchecked_Deallocation
+     (Metainfo, Metainfo_Access);
 
    --------------
    -- Announce --
@@ -20,7 +25,7 @@ package body Torrent.Metainfo_Files is
    not overriding function Announce
      (Self : Metainfo_File) return League.IRIs.IRI is
    begin
-      return Self.Announce;
+      return Self.Data.Announce;
    end Announce;
 
    ----------------
@@ -29,7 +34,7 @@ package body Torrent.Metainfo_Files is
 
    not overriding function File_Count (Self : Metainfo_File) return Positive is
    begin
-      return Self.File_Count;
+      return Self.Data.File_Count;
    end File_Count;
 
    -----------------
@@ -40,7 +45,7 @@ package body Torrent.Metainfo_Files is
      (Self  : Metainfo_File;
       Index : Positive) return Ada.Streams.Stream_Element_Count is
    begin
-      return Self.Files (Index).Length;
+      return Self.Data.Files (Index).Length;
    end File_Length;
 
    ---------------
@@ -52,8 +57,17 @@ package body Torrent.Metainfo_Files is
       Index : Positive) return League.String_Vectors.Universal_String_Vector
    is
    begin
-      return Self.Files (Index).Path;
+      return Self.Data.Files (Index).Path;
    end File_Path;
+
+   --------------
+   -- Finalize --
+   --------------
+
+   procedure Finalize (Self : in out Metainfo_File) is
+   begin
+      Free (Self.Data);
+   end Finalize;
 
    ---------------
    -- Info_Hash --
@@ -61,7 +75,7 @@ package body Torrent.Metainfo_Files is
 
    not overriding function Info_Hash (Self  : Metainfo_File) return SHA1 is
    begin
-      return Self.Info_Hash;
+      return Self.Data.Info_Hash;
    end Info_Hash;
 
    ----------
@@ -71,7 +85,7 @@ package body Torrent.Metainfo_Files is
    not overriding function Name
      (Self : Metainfo_File) return League.Strings.Universal_String is
    begin
-      return Self.Name;
+      return Self.Data.Name;
    end Name;
 
    -----------------
@@ -81,7 +95,7 @@ package body Torrent.Metainfo_Files is
    not overriding function Piece_Count
      (Self : Metainfo_File) return Positive is
    begin
-      return Self.Piece_Count;
+      return Self.Data.Piece_Count;
    end Piece_Count;
 
    ------------------
@@ -91,7 +105,7 @@ package body Torrent.Metainfo_Files is
    not overriding function Piece_Length
      (Self : Metainfo_File) return Ada.Streams.Stream_Element_Count is
    begin
-      return Self.Piece_Length;
+      return Self.Data.Piece_Length;
    end Piece_Length;
 
    ----------------
@@ -103,15 +117,16 @@ package body Torrent.Metainfo_Files is
       Index : Positive) return SHA1
    is
    begin
-      return Self.Hashes (Index);
+      return Self.Data.Hashes (Index);
    end Piece_SHA1;
 
    ----------
    -- Read --
    ----------
 
-   not overriding function Read
-     (File_Name : League.Strings.Universal_String) return Metainfo_File
+   not overriding procedure Read
+     (Self      : in out Metainfo_File;
+      File_Name : League.Strings.Universal_String)
    is
       use type Ada.Streams.Stream_Element;
       use type Ada.Streams.Stream_Element_Offset;
@@ -125,7 +140,7 @@ package body Torrent.Metainfo_Files is
         (Text : Wide_Wide_String) return League.Strings.Universal_String
            renames League.Strings.To_Universal_String;
 
-      function Parse_Top_Dictionary return Metainfo_File;
+      function Parse_Top_Dictionary return Metainfo;
 
       procedure Parse_Int (Value : out Ada.Streams.Stream_Element_Offset);
 
@@ -352,7 +367,7 @@ package body Torrent.Metainfo_Files is
       -- Parse_Top_Dictionary --
       --------------------------
 
-      function Parse_Top_Dictionary return Metainfo_File is
+      function Parse_Top_Dictionary return Metainfo is
          Index    : Ada.Streams.Stream_Element_Count;
          Key      : League.Strings.Universal_String;
          Announce : League.Strings.Universal_String;
@@ -385,7 +400,7 @@ package body Torrent.Metainfo_Files is
             raise Constraint_Error with Error;
          end if;
 
-         return Result : Metainfo_File :=
+         return Result : Metainfo :=
            (Piece_Count  => Positive (Pieces.Length) / 20,
             File_Count   => Files.Last_Index,
             Announce     => League.IRIs.From_Universal_String (Announce),
@@ -607,9 +622,9 @@ package body Torrent.Metainfo_Files is
         (Input, Ada.Streams.Stream_IO.In_File, File_Name.To_UTF_8_String);
       Ada.Streams.Stream_IO.Read (Input, Buffer, Last);
 
-      return Result : constant Metainfo_File := Parse_Top_Dictionary do
-         Ada.Streams.Stream_IO.Close (Input);
-      end return;
+      Free (Self.Data);
+      Self.Data := new Metainfo'(Parse_Top_Dictionary);
+      Ada.Streams.Stream_IO.Close (Input);
    end Read;
 
 end Torrent.Metainfo_Files;

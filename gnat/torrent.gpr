@@ -4,6 +4,7 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
+with "aws";
 with "matreshka_league";
 
 project Torrent is

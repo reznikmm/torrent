@@ -4,6 +4,7 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
+with Ada.Finalization;
 with Ada.Streams;
 
 with League.IRIs;
@@ -12,12 +13,12 @@ with League.Strings;
 
 package Torrent.Metainfo_Files is
 
-   type Metainfo_File (<>) is tagged private;
+   type Metainfo_File is tagged limited private;
    --  Metainfo files also known as .torrent files
 
-   not overriding function Read
-     (File_Name : League.Strings.Universal_String)
-      return Metainfo_File;
+   not overriding procedure Read
+     (Self      : in out Metainfo_File;
+      File_Name : League.Strings.Universal_String);
    --  Read and decode given metainfo file
 
    not overriding function Announce
@@ -73,9 +74,9 @@ private
    type File_Information_Array is array (Positive range <>)
      of File_Information;
 
-   type Metainfo_File
+   type Metainfo
      (Piece_Count : Positive;
-      File_Count  : Positive) is tagged
+      File_Count  : Positive) is
    record
       Announce     : League.IRIs.IRI;
       Name         : League.Strings.Universal_String;
@@ -84,5 +85,13 @@ private
       Hashes       : SHA1_Array (1 .. Piece_Count);
       Files        : File_Information_Array (1 .. File_Count);
    end record;
+
+   type Metainfo_Access is access all Metainfo;
+
+   type Metainfo_File is new Ada.Finalization.Limited_Controlled with record
+      Data : Metainfo_Access;
+   end record;
+
+   procedure Finalize (Self : in out Metainfo_File);
 
 end Torrent.Metainfo_Files;
