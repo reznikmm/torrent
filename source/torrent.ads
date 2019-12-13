@@ -15,4 +15,9 @@ package Torrent is
 
    function Image (Value : SHA1) return SHA1_Image;
 
+   subtype Piece_Offset is Ada.Streams.Stream_Element_Count;
+
+   type Boolean_Array is array (Positive range <>) of Boolean
+     with Pack;
+
 end Torrent;

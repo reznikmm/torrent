@@ -103,7 +103,7 @@ package body Torrent.Metainfo_Files is
    ------------------
 
    not overriding function Piece_Length
-     (Self : Metainfo_File) return Ada.Streams.Stream_Element_Count is
+     (Self : Metainfo_File) return Piece_Offset is
    begin
       return Self.Data.Piece_Length;
    end Piece_Length;

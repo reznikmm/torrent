@@ -54,7 +54,6 @@ package body Torrent.Trackers is
       Query  : League.Strings.Universal_String := Tracker.Query;
       Result : League.IRIs.IRI := Tracker;
    begin
-      Result.Set_Query (Query);
       Query.Append (if Query.Is_Empty then "?" else "&");
       Query.Append ("info_hash=");
       Query.Append (URL_Encoded (Info_Hash));
@@ -82,6 +81,8 @@ package body Torrent.Trackers is
          when Regular =>
             null;
       end case;
+
+      Result.Set_Query (Query);
 
       return Result;
    end Event_URL;

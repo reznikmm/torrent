@@ -16,6 +16,9 @@ package Torrent.Metainfo_Files is
    type Metainfo_File is tagged limited private;
    --  Metainfo files also known as .torrent files
 
+   type Metainfo_File_Access is access all Metainfo_File'Class
+     with Storage_Size => 0;
+
    not overriding procedure Read
      (Self      : in out Metainfo_File;
       File_Name : League.Strings.Universal_String);
@@ -31,7 +34,7 @@ package Torrent.Metainfo_Files is
    --  advisory.
 
    not overriding function Piece_Length
-     (Self : Metainfo_File) return Ada.Streams.Stream_Element_Count;
+     (Self : Metainfo_File) return Piece_Offset;
    --  The number of bytes in each piece the file is split into.
 
    not overriding function Piece_Count (Self : Metainfo_File) return Positive;
@@ -80,7 +83,7 @@ private
    record
       Announce     : League.IRIs.IRI;
       Name         : League.Strings.Universal_String;
-      Piece_Length : Ada.Streams.Stream_Element_Count;
+      Piece_Length : Piece_Offset;
       Info_Hash    : SHA1;
       Hashes       : SHA1_Array (1 .. Piece_Count);
       Files        : File_Information_Array (1 .. File_Count);
