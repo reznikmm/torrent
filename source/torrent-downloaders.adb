@@ -291,13 +291,13 @@ package body Torrent.Downloaders is
 
    protected body Tracked_Pieces is
 
-      function Get_Piece_Size (Piece : Positive) return Piece_Offset;
+      function Get_Piece_Size (Piece : Piece_Index) return Piece_Offset;
 
       --------------------
       -- Get_Piece_Size --
       --------------------
 
-      function Get_Piece_Size (Piece : Positive) return Piece_Offset is
+      function Get_Piece_Size (Piece : Piece_Index) return Piece_Offset is
       begin
          if Piece = Piece_Count then
             return Last_Piece_Size;
@@ -320,7 +320,7 @@ package body Torrent.Downloaders is
       --------------------
 
       procedure Interval_Saved
-        (Piece : Positive;
+        (Piece : Piece_Index;
          Value : Torrent.Connections.Interval;
          Last  : out Boolean)
       is
@@ -351,7 +351,7 @@ package body Torrent.Downloaders is
       ---------------------
 
       procedure Piece_Completed
-        (Piece : Positive;
+        (Piece : Piece_Index;
          Ok    : Boolean) is
       begin
          Ada.Text_IO.Put_Line

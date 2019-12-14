@@ -103,7 +103,7 @@ package body Torrent.Metainfo_Files is
    -----------------
 
    not overriding function Piece_Count
-     (Self : Metainfo_File) return Positive is
+     (Self : Metainfo_File) return Piece_Index is
    begin
       return Self.Data.Piece_Count;
    end Piece_Count;
@@ -124,7 +124,7 @@ package body Torrent.Metainfo_Files is
 
    not overriding function Piece_SHA1
      (Self  : Metainfo_File;
-      Index : Positive) return SHA1
+      Index : Piece_Index) return SHA1
    is
    begin
       return Self.Data.Hashes (Index);
@@ -411,7 +411,7 @@ package body Torrent.Metainfo_Files is
          end if;
 
          return Result : Metainfo :=
-           (Piece_Count  => Positive (Pieces.Length) / 20,
+           (Piece_Count  => Piece_Index (Pieces.Length) / 20,
             File_Count   => Files.Last_Index,
             Announce     => League.IRIs.From_Universal_String (Announce),
             Name         => Name,

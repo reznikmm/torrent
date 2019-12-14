@@ -41,12 +41,13 @@ package Torrent.Metainfo_Files is
      (Self : Metainfo_File) return Piece_Offset;
    --  The number of bytes in the last piece.
 
-   not overriding function Piece_Count (Self : Metainfo_File) return Positive;
+   not overriding function Piece_Count
+     (Self : Metainfo_File) return Piece_Index;
    --  Number of pieces
 
    not overriding function Piece_SHA1
      (Self  : Metainfo_File;
-      Index : Positive) return SHA1
+      Index : Piece_Index) return SHA1
      with Pre => Index <= Self.Piece_Count;
    --  The SHA1 hash of the piece at the corresponding index.
 
@@ -71,7 +72,7 @@ package Torrent.Metainfo_Files is
 
 private
 
-   type SHA1_Array is array (Positive range <>) of SHA1;
+   type SHA1_Array is array (Piece_Index range <>) of SHA1;
 
    type File_Information is record
       Length : Ada.Streams.Stream_Element_Count;
@@ -82,7 +83,7 @@ private
      of File_Information;
 
    type Metainfo
-     (Piece_Count : Positive;
+     (Piece_Count : Piece_Index;
       File_Count  : Positive) is
    record
       Announce     : League.IRIs.IRI;

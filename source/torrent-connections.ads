@@ -32,7 +32,7 @@ package Torrent.Connections is
       Value : Interval);
 
    type Piece_Interval is record
-      Piece : Positive;
+      Piece : Piece_Index;
       Span  : Interval;
    end record;
 
@@ -45,7 +45,7 @@ package Torrent.Connections is
    end record;
 
    type Piece_State is record
-      Piece     : Natural;
+      Piece     : Piece_Count;
       Intervals : Interval_Vectors.Vector;
    end record;
 
@@ -70,19 +70,19 @@ package Torrent.Connections is
 
    not overriding procedure Interval_Saved
      (Self  : in out Connection_State_Listener;
-      Piece : Positive;
+      Piece : Piece_Index;
       Value : Interval;
       Last  : out Boolean) is abstract;
 
    not overriding procedure Piece_Completed
      (Self  : in out Connection_State_Listener;
-      Piece : Positive;
+      Piece : Piece_Index;
       Ok    : Boolean) is abstract;
 
    type Connection
      (Meta        : not null Torrent.Metainfo_Files.Metainfo_File_Access;
       Storage     : not null Torrent.Storages.Storage_Access;
-      Piece_Count : Positive) is tagged limited private;
+      Piece_Count : Piece_Index) is tagged limited private;
 
    procedure Initialize
      (Self     : in out Connection'Class;
@@ -122,7 +122,7 @@ private
    type Connection
      (Meta        : not null Torrent.Metainfo_Files.Metainfo_File_Access;
       Storage     : not null Torrent.Storages.Storage_Access;
-      Piece_Count : Positive) is limited
+      Piece_Count : Piece_Index) is limited
      new Ada.Finalization.Limited_Controlled with
    record
       Peer           : GNAT.Sockets.Sock_Addr_Type;

@@ -17,7 +17,11 @@ package Torrent is
 
    subtype Piece_Offset is Ada.Streams.Stream_Element_Count;
 
-   type Boolean_Array is array (Positive range <>) of Boolean
+   type Piece_Count is new Natural;
+
+   subtype Piece_Index is Piece_Count range 1 .. Piece_Count'Last;
+
+   type Boolean_Array is array (Piece_Index range <>) of Boolean
      with Pack;
 
 end Torrent;

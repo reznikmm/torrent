@@ -20,7 +20,7 @@ package Torrent.Downloaders is
    type Downloader
      (Meta        : not null Torrent.Metainfo_Files.Metainfo_File_Access;
       File_Count  : Ada.Containers.Count_Type;
-      Piece_Count : Positive) is
+      Piece_Count : Piece_Index) is
         tagged limited private;
    --  The downloader tracks one torrent file and all connections
    --  related to it.
@@ -40,12 +40,12 @@ private
    type Tracker_Response_Access is access Torrent.Trackers.Response;
 
    package Piece_State_Maps is new Ada.Containers.Ordered_Maps
-     (Key_Type     => Positive,
+     (Key_Type     => Piece_Index,
       Element_Type => Torrent.Connections.Interval_Vectors.Vector,
       "<"          => "<",
       "="          => Torrent.Connections.Interval_Vectors."=");
 
-   protected type Tracked_Pieces (Piece_Count : Positive) is
+   protected type Tracked_Pieces (Piece_Count : Piece_Index) is
       new Torrent.Connections.Connection_State_Listener with
 
       procedure Initialize
@@ -60,12 +60,12 @@ private
         (Map : Boolean_Array) return Boolean;
 
       overriding procedure Interval_Saved
-        (Piece : Positive;
+        (Piece : Piece_Index;
          Value : Torrent.Connections.Interval;
          Last  : out Boolean);
 
       overriding procedure Piece_Completed
-        (Piece : Positive;
+        (Piece : Piece_Index;
          Ok    : Boolean);
 
       overriding procedure Unreserve_Intervals
@@ -81,9 +81,9 @@ private
    end Tracked_Pieces;
 
    type Downloader
-     (Meta       : not null Torrent.Metainfo_Files.Metainfo_File_Access;
-      File_Count : Ada.Containers.Count_Type;
-      Piece_Count : Positive) is
+     (Meta        : not null Torrent.Metainfo_Files.Metainfo_File_Access;
+      File_Count  : Ada.Containers.Count_Type;
+      Piece_Count : Piece_Index) is
      new Ada.Finalization.Limited_Controlled with
       record
          Path             : League.String_Vectors.Universal_String_Vector;

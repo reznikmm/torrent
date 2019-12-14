@@ -46,8 +46,8 @@ package body Torrent.Connections is
       From : Ada.Streams.Stream_Element_Count := 0) return Natural;
 
    function Is_Valid_Piece
-     (Self : Connection'Class;
-      Piece : Positive) return Boolean;
+     (Self  : Connection'Class;
+      Piece : Piece_Index) return Boolean;
 
    procedure Send_Message
      (Self : Connection'Class;
@@ -184,7 +184,7 @@ package body Torrent.Connections is
 
    function Is_Valid_Piece
      (Self  : Connection'Class;
-      Piece : Positive) return Boolean
+      Piece : Piece_Index) return Boolean
    is
       Context : GNAT.SHA1.Context;
       From    : Ada.Streams.Stream_Element_Offset :=
@@ -275,7 +275,7 @@ package body Torrent.Connections is
       procedure On_Message (Data : Ada.Streams.Stream_Element_Array);
 
       procedure Save_Piece
-        (Index  : Positive;
+        (Index  : Piece_Index;
          Offset : Natural;
          Data   : Ada.Streams.Stream_Element_Array);
 
@@ -389,7 +389,7 @@ package body Torrent.Connections is
            (From : Ada.Streams.Stream_Element_Count := 0) return Natural
              is (Get_Int (Data, From));
 
-         Index : Natural;
+         Index : Piece_Index;
       begin
          Ada.Text_IO.Put ("MSG:" & GNAT.Sockets.Image (Self.Peer) & " ");
 
@@ -411,7 +411,8 @@ package body Torrent.Connections is
             when 4 =>  -- have
 
                declare
-                  Index : constant Positive := Get_Int (1) + 1;
+                  Index : constant Piece_Index :=
+                    Piece_Index (Get_Int (1) + 1);
                begin
                   if Index in Self.Piece_Map'Range then
                      Ada.Text_IO.Put_Line ("have" & (Index'Img));
@@ -466,7 +467,8 @@ package body Torrent.Connections is
 
             when 7 => -- piece
                declare
-                  Index  : constant Positive := Get_Int (1) + 1;
+                  Index  : constant Piece_Index :=
+                    Piece_Index (Get_Int (1) + 1);
                   Offset : constant Natural := Get_Int (5);
                begin
                   Ada.Text_IO.Put_Line ("piece" & (Index'Img) & (Offset'Img));
@@ -548,7 +550,7 @@ package body Torrent.Connections is
       ----------------
 
       procedure Save_Piece
-        (Index  : Positive;
+        (Index  : Piece_Index;
          Offset : Natural;
          Data   : Ada.Streams.Stream_Element_Array)
       is
@@ -587,7 +589,7 @@ package body Torrent.Connections is
                Self.Listener.Piece_Completed (Index, True);
                Self.Send_Message
                  ((00, 00, 00, 05, 04) &   --  have
-                    To_Int (Index - 1));
+                    To_Int (Natural (Index - 1)));
             else
                Self.Listener.Piece_Completed (Index, False);
             end if;
@@ -629,7 +631,7 @@ package body Torrent.Connections is
 
                      Self.Send_Message
                        ((00, 00, 00, 13, 06) &
-                          To_Int (Self.Current_Piece.Piece - 1) &
+                          To_Int (Natural (Self.Current_Piece.Piece - 1)) &
                           To_Int (Natural (Last.From)) &
                           To_Int (Natural (Last.To - Last.From + 1)));
                   end;
@@ -646,7 +648,8 @@ package body Torrent.Connections is
 
                   Self.Send_Message
                     ((00, 00, 00, 13, 06) &
-                       To_Int (Self.Pipelined.Request.List (J).Piece - 1) &
+                       To_Int (Natural
+                                (Self.Pipelined.Request.List (J).Piece - 1)) &
                        To_Int (Natural (Self.Pipelined.Request.List (J)
                                              .Span.From)) &
                        To_Int (Natural (Self.Pipelined.Request.List (J)
@@ -685,13 +688,13 @@ package body Torrent.Connections is
             declare
                Last   : constant Interval :=
                  Self.Current_Piece.Intervals.Last_Element;
-               Index  : constant Positive := Self.Current_Piece.Piece;
+               Index  : constant Piece_Index := Self.Current_Piece.Piece;
                Offset : constant Piece_Offset := Last.From;
                Length : constant Piece_Offset := Last.To - Offset + 1;
             begin
                Self.Send_Message
                  ((00, 00, 00, 13, 06) &
-                    To_Int (Index - 1) &
+                    To_Int (Natural (Index - 1)) &
                     To_Int (Natural (Offset)) &
                     To_Int (Natural (Length)));
 
