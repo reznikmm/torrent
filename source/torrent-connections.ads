@@ -98,9 +98,12 @@ package Torrent.Connections is
      (Self  : in out Connection'Class;
       Value : Boolean);
 
+   type Piece_Index_Array is array (Piece_Index range <>) of Piece_Index;
+
    procedure Serve
-     (Self : in out Connection'Class;
-      Time : Duration);
+     (Self      : in out Connection'Class;
+      Completed : Piece_Index_Array;
+      Time      : Duration);
 
 private
 
@@ -142,6 +145,7 @@ private
       Pipelined      : Sent_Piece_Intervals;
       Requests       : Request_Queue;
       Last_Request   : Natural;
+      Last_Completed : Torrent.Piece_Count;
       Listener       : Connection_State_Listener_Access;
       Piece_Map      : Boolean_Array (1 .. Piece_Count);
    end record;

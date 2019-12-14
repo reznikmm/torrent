@@ -30,7 +30,10 @@ package body Torrent.Downloaders is
      with Storage_Size => 0;
 
    task type Session is
-      entry Seed (Value : not null Torrent.Connections.Connection_Access);
+      entry Seed
+        (Downloader : not null Downloader_Access;
+         Value      : not null Torrent.Connections.Connection_Access);
+
       entry Stop_Seeding;
    end Session;
 
@@ -82,7 +85,7 @@ package body Torrent.Downloaders is
          end Connect;
 
          begin
-            Next.Serve (0.1);
+            Next.Serve ((1 .. 0 => <>), 0.1);
 
             if Next.Connected then
                Manager.Connected (Next);
@@ -128,14 +131,14 @@ package body Torrent.Downloaders is
 
             for J in List'Range loop
                if List (J) /= null then
-                  Sessions (J).Seed (List (J));
+                  Sessions (J).Seed (Job, List (J));
                end if;
             end loop;
 
             --  process chocked connections.
             for J of Job.Chocked loop
                if J.Connected and then not (for some X of List => X = J) then
-                  J.Serve (0.1);  --  FIXME
+                  J.Serve (Job.Completed (1 .. Job.Last_Completed), 0.1);
                end if;
             end loop;
 
@@ -157,12 +160,15 @@ package body Torrent.Downloaders is
    task body Session is
       Seed_Time : constant Duration := 10.0;
 
+      Job  : Downloader_Access;
       Conn : Torrent.Connections.Connection_Access;
    begin
       loop
          accept Seed
-           (Value : not null Torrent.Connections.Connection_Access)
+           (Downloader : not null Downloader_Access;
+            Value      : not null Torrent.Connections.Connection_Access)
          do
+            Job := Downloader;
             Conn := Value;
          end Seed;
 
@@ -170,7 +176,7 @@ package body Torrent.Downloaders is
            and then Conn.Intrested
          then
             Conn.Set_Choked (False);
-            Conn.Serve (Seed_Time);
+            Conn.Serve (Job.Completed (1 .. Job.Last_Completed), Seed_Time);
             Conn.Set_Choked (True);
          end if;
 
@@ -218,6 +224,7 @@ package body Torrent.Downloaders is
       Self.Left := 0;
       Self.Downloaded := 0;
       Self.Uploaded := 0;
+      Self.Last_Completed := 0;
       Self.Storage.Initialize (Path.Join ('/'));
 
       for J in 1 .. Self.Meta.File_Count loop
@@ -362,6 +369,10 @@ package body Torrent.Downloaders is
          Finished.Delete (Piece);
          Unfinished.Delete (Piece);
 
+         if Ok then
+            Downloader.Completed (Downloader.Last_Completed + 1) := Piece;
+            Downloader.Last_Completed := Downloader.Last_Completed + 1;
+         end if;
       end Piece_Completed;
 
       -----------------------

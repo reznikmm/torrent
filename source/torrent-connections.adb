@@ -53,6 +53,10 @@ package body Torrent.Connections is
      (Self : Connection'Class;
       Data : Ada.Streams.Stream_Element_Array);
 
+   procedure Send_Have
+     (Self  : Connection'Class;
+      Piece : Piece_Index);
+
    procedure Unreserve_Intervals (Self : in out Connection'Class);
 
    ---------------
@@ -120,6 +124,7 @@ package body Torrent.Connections is
       Self.He_Intrested := False;
       Self.My_Peer_Id := My_Id;
       Self.Last_Request := 0;
+      Self.Last_Completed := 0;
       Self.Listener := Listener;
       Self.Current_Piece := (0, Intervals => <>);
       Self.Piece_Map := (others => False);
@@ -216,6 +221,19 @@ package body Torrent.Connections is
       return Self.Meta.Piece_SHA1 (Piece) = Value;
    end Is_Valid_Piece;
 
+   ---------------
+   -- Send_Have --
+   ---------------
+
+   procedure Send_Have
+     (Self  : Connection'Class;
+      Piece : Piece_Index) is
+   begin
+      Self.Send_Message
+        ((00, 00, 00, 05, 04) &   --  have
+           To_Int (Natural (Piece - 1)));
+   end Send_Have;
+
    ------------------
    -- Send_Message --
    ------------------
@@ -253,8 +271,9 @@ package body Torrent.Connections is
    -----------
 
    procedure Serve
-     (Self : in out Connection'Class;
-      Time : Duration)
+     (Self      : in out Connection'Class;
+      Completed : Piece_Index_Array;
+      Time      : Duration)
    is
       use type Ada.Calendar.Time;
 
@@ -587,9 +606,7 @@ package body Torrent.Connections is
          if Last then
             if Self.Is_Valid_Piece (Index) then
                Self.Listener.Piece_Completed (Index, True);
-               Self.Send_Message
-                 ((00, 00, 00, 05, 04) &   --  have
-                    To_Int (Natural (Index - 1)));
+               Self.Send_Have (Index);
             else
                Self.Listener.Piece_Completed (Index, False);
             end if;
@@ -731,6 +748,12 @@ package body Torrent.Connections is
             Self.Send_Message ((00, 00, 00, 01, 01));  --  unchoke
          end if;
       end if;
+
+      for J in Self.Last_Completed + 1 .. Completed'Last loop
+         Self.Send_Have (Completed (J));
+      end loop;
+
+      Self.Last_Completed := Completed'Last;
 
       Data (1 .. Last) := Self.Unparsed.To_Stream_Element_Array;
       Self.Unparsed.Clear;

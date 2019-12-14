@@ -9,9 +9,10 @@ with "matreshka_league";
 
 project Torrent is
 
+   Build_Dir := external ("BUILD", "../.objs");
    for Source_Dirs use ("../source");
    for Main use ("torrent-run.adb");
-   for Object_Dir use "../.obj";
+   for Object_Dir use Build_Dir;
 
    package Compiler is
       for Default_Switches ("ada") use

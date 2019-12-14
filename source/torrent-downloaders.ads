@@ -45,7 +45,9 @@ private
       "<"          => "<",
       "="          => Torrent.Connections.Interval_Vectors."=");
 
-   protected type Tracked_Pieces (Piece_Count : Piece_Index) is
+   protected type Tracked_Pieces
+     (Downloader  : not null access Downloaders.Downloader;
+      Piece_Count : Piece_Index) is
       new Torrent.Connections.Connection_State_Listener with
 
       procedure Initialize
@@ -88,15 +90,17 @@ private
       record
          Path             : League.String_Vectors.Universal_String_Vector;
          Tracker_Response : Tracker_Response_Access;
-         Tracked          : aliased Tracked_Pieces (Piece_Count);
+         Tracked          : aliased Tracked_Pieces
+           (Downloader'Unchecked_Access, Piece_Count);
          Peer_Id          : SHA1;
          Port             : Positive;
          Uploaded         : Ada.Streams.Stream_Element_Count;
          Downloaded       : Ada.Streams.Stream_Element_Count;
          Left             : Ada.Streams.Stream_Element_Count;
---         Last_Piece_Size  : Positive;
          Chocked          : Connection_Vectors.Vector;
-
+         Completed        : Torrent.Connections.Piece_Index_Array
+           (1 .. Piece_Count);
+         Last_Completed   : Torrent.Piece_Count;
          Storage : aliased Torrent.Storages.Storage (Meta, File_Count);
       end record;
 
