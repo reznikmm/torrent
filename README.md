@@ -10,11 +10,11 @@ make all install PREFIX=/path/to/install
 ```
 
 ### Dependencies
-It depends on [Matreshka](https://forge.ada-ru.org/matreshka) library.
+It depends on [Matreshka](https://forge.ada-ru.org/matreshka) and AWS libraries.
 
 ## Usage
 
-To start server just run `torrent-run` executable.
+To start server just run `torrent-run <file.torrent>` executable.
 
 To use as a library, add `with "torrent";` to your project file.
 

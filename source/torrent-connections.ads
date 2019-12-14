@@ -105,6 +105,11 @@ package Torrent.Connections is
       Completed : Piece_Index_Array;
       Time      : Duration);
 
+   function Is_Valid_Piece
+     (Meta    : not null Torrent.Metainfo_Files.Metainfo_File_Access;
+      Storage : Torrent.Storages.Storage'Class;
+      Piece   : Piece_Index) return Boolean;
+
 private
 
    type Request is record

@@ -88,6 +88,7 @@ package body Torrent.Storages is
          end if;
 
          declare
+            use type Ada.Streams.Stream_IO.Count;
             use type League.Strings.Universal_String;
 
             Input : Ada.Streams.Stream_IO.File_Type;
@@ -101,13 +102,20 @@ package body Torrent.Storages is
                Name.To_UTF_8_String,
                Form => "shared=no");
 
-            Ada.Streams.Stream_IO.Read
-              (File => Input,
-               Item => Data (From .. Last),
-               Last => Done,
-               From => Ada.Streams.Stream_IO.Count (Skip + 1));
+            if Ada.Streams.Stream_IO.Size (Input) >=
+              Ada.Streams.Stream_IO.Count (Skip + Data'Length)
+            then
+               Ada.Streams.Stream_IO.Read
+                 (File => Input,
+                  Item => Data (From .. Last),
+                  Last => Done,
+                  From => Ada.Streams.Stream_IO.Count (Skip + 1));
 
-            pragma Assert (Done = Last);
+               pragma Assert (Done = Last);
+
+            else
+               Data := (others => 0);
+            end if;
 
             Ada.Streams.Stream_IO.Close (Input);
          end;

@@ -57,6 +57,10 @@ package body Torrent.Connections is
      (Self  : Connection'Class;
       Piece : Piece_Index);
 
+   procedure Send_Bitfield
+     (Self      : Connection'Class;
+      Completed : Piece_Index_Array);
+
    procedure Unreserve_Intervals (Self : in out Connection'Class);
 
    ---------------
@@ -189,37 +193,72 @@ package body Torrent.Connections is
 
    function Is_Valid_Piece
      (Self  : Connection'Class;
-      Piece : Piece_Index) return Boolean
+      Piece : Piece_Index) return Boolean is
+   begin
+      return Is_Valid_Piece (Self.Meta, Self.Storage.all, Piece);
+   end Is_Valid_Piece;
+
+   --------------------
+   -- Is_Valid_Piece --
+   --------------------
+
+   function Is_Valid_Piece
+     (Meta    : not null Torrent.Metainfo_Files.Metainfo_File_Access;
+      Storage : Torrent.Storages.Storage'Class;
+      Piece   : Piece_Index) return Boolean
    is
       Context : GNAT.SHA1.Context;
       From    : Ada.Streams.Stream_Element_Offset :=
-        Piece_Offset (Piece - 1) * Self.Meta.Piece_Length;
+        Piece_Offset (Piece - 1) * Meta.Piece_Length;
       Left    : Ada.Streams.Stream_Element_Offset;
       Data    : Ada.Streams.Stream_Element_Array (1 .. 4096);
       Value   : SHA1;
    begin
-      if Piece = Self.Meta.Piece_Count then
-         Left := Self.Meta.Last_Piece_Length;
+      if Piece = Meta.Piece_Count then
+         Left := Meta.Last_Piece_Length;
       else
-         Left := Self.Meta.Piece_Length;
+         Left := Meta.Piece_Length;
       end if;
 
       while Left > Data'Length loop
-         Self.Storage.Read (From, Data);
+         Storage.Read (From, Data);
          From := From + Data'Length;
          Left := Left - Data'Length;
          GNAT.SHA1.Update (Context, Data);
       end loop;
 
       if Left > 0 then
-         Self.Storage.Read (From, Data (1 .. Left));
+         Storage.Read (From, Data (1 .. Left));
          GNAT.SHA1.Update (Context, Data (1 .. Left));
       end if;
 
       Value := GNAT.SHA1.Digest (Context);
 
-      return Self.Meta.Piece_SHA1 (Piece) = Value;
+      return Meta.Piece_SHA1 (Piece) = Value;
    end Is_Valid_Piece;
+
+   -------------------
+   -- Send_Bitfield --
+   -------------------
+
+   procedure Send_Bitfield
+     (Self      : Connection'Class;
+      Completed : Piece_Index_Array)
+   is
+      Length : constant Piece_Offset :=
+        Piece_Offset (Self.Piece_Count + 7) / 8;
+      Data   : Ada.Streams.Stream_Element_Array (1 .. Length) := (others => 0);
+      Mask   : Interfaces.Unsigned_8;
+   begin
+      for X of Completed loop
+         Mask := Interfaces.Shift_Right (128, Natural ((X - 1) mod 8));
+
+         Data (Piece_Offset (X - 1) / 8) := Data (Piece_Offset (X - 1) / 8)
+           or Ada.Streams.Stream_Element (Mask);
+      end loop;
+
+      Self.Send_Message (To_Int (Positive (Length) + 1) & 05 & Data);
+   end Send_Bitfield;
 
    ---------------
    -- Send_Have --
@@ -354,6 +393,9 @@ package body Torrent.Connections is
             Option => (GNAT.Sockets.Receive_Timeout, 1.0));
 
          Self.Sent_Handshake := True;
+
+         Self.Send_Bitfield (Completed);
+         Self.Last_Completed := Completed'Last;
       end Connect_And_Send_Handshake;
 
       -------------------

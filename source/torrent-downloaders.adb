@@ -26,6 +26,8 @@ package body Torrent.Downloaders is
      (Self   : Downloader'Class;
       Result : out Connection_Access_Array);
 
+   procedure Check_Stored_Pieces (Self : in out Downloader'Class);
+
    type Downloader_Access is access all Downloader'Class
      with Storage_Size => 0;
 
@@ -44,7 +46,9 @@ package body Torrent.Downloaders is
    end Manager;
 
    task Initiator is
-      entry Connect (Value : not null Torrent.Connections.Connection_Access);
+      entry Connect
+        (Downloader : not null Downloader_Access;
+         Value      : not null Torrent.Connections.Connection_Access);
    end Initiator;
 
    ----------------------
@@ -75,17 +79,20 @@ package body Torrent.Downloaders is
    ---------------
 
    task body Initiator is
+      Job  : Downloader_Access;
       Next :  Torrent.Connections.Connection_Access;
    begin
       loop
          accept Connect
-           (Value : not null Torrent.Connections.Connection_Access)
+           (Downloader : not null Downloader_Access;
+            Value      : not null Torrent.Connections.Connection_Access)
          do
+            Job := Downloader;
             Next := Value;
          end Connect;
 
          begin
-            Next.Serve ((1 .. 0 => <>), 0.1);
+            Next.Serve (Job.Completed (1 .. Job.Last_Completed), 0.1);
 
             if Next.Connected then
                Manager.Connected (Next);
@@ -183,6 +190,20 @@ package body Torrent.Downloaders is
          accept Stop_Seeding;
       end loop;
    end Session;
+
+   -------------------------
+   -- Check_Stored_Pieces --
+   -------------------------
+
+   procedure Check_Stored_Pieces (Self : in out Downloader'Class) is
+   begin
+      for J in 1 .. Self.Piece_Count loop
+         if Connections.Is_Valid_Piece (Self.Meta, Self.Storage, J) then
+            Self.Tracked.Piece_Completed (J, True);
+         end if;
+      end loop;
+   end Check_Stored_Pieces;
+
    -----------
    -- Start --
    -----------
@@ -226,6 +247,8 @@ package body Torrent.Downloaders is
       Self.Uploaded := 0;
       Self.Last_Completed := 0;
       Self.Storage.Initialize (Path.Join ('/'));
+
+      Self.Check_Stored_Pieces;
 
       for J in 1 .. Self.Meta.File_Count loop
          Self.Left := Self.Left + Self.Meta.File_Length (J);
@@ -282,7 +305,7 @@ package body Torrent.Downloaders is
                Address,
                Self.Tracked'Unchecked_Access);
 
-            Initiator.Connect (Connection);
+            Initiator.Connect (Self'Unchecked_Access, Connection);
          end;
       end loop;
 
@@ -366,8 +389,13 @@ package body Torrent.Downloaders is
 
          Our_Map (Piece) := Ok;
 
-         Finished.Delete (Piece);
-         Unfinished.Delete (Piece);
+         if Finished.Contains (Piece) then
+            Finished.Delete (Piece);
+         end if;
+
+         if Unfinished.Contains (Piece) then
+            Unfinished.Delete (Piece);
+         end if;
 
          if Ok then
             Downloader.Completed (Downloader.Last_Completed + 1) := Piece;
