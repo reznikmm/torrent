@@ -27,6 +27,23 @@ package Torrent.Connections is
    package Interval_Vectors is new Ada.Containers.Vectors
      (Positive, Interval);
 
+   procedure Insert
+     (List  : in out Interval_Vectors.Vector;
+      Value : Interval);
+
+   type Piece_Interval is record
+      Piece : Positive;
+      Span  : Interval;
+   end record;
+
+   subtype Piece_Interval_Count is Natural range 0 .. 8;
+
+   type Piece_Interval_Array is array (Positive range <>) of Piece_Interval;
+
+   type Piece_Intervals (Length : Piece_Interval_Count := 0) is record
+      List : Piece_Interval_Array (1 .. Length);
+   end record;
+
    type Piece_State is record
       Piece     : Natural;
       Intervals : Interval_Vectors.Vector;
@@ -43,12 +60,24 @@ package Torrent.Connections is
       Map  : Boolean_Array) return Boolean is abstract;
 
    not overriding procedure Reserve_Intervals
-     (Self       : in out Connection_State_Listener;
-      Connection : Connection_Access;
-      Map        : Boolean_Array;
-      Value      : out Piece_State) is abstract;
-   --  If connection peer inform, that new piece is ready recalculate
-   --  if we are intrested and assign new piece to download.
+     (Self  : in out Connection_State_Listener;
+      Map   : Boolean_Array;
+      Value : out Piece_State) is abstract;
+
+   not overriding procedure Unreserve_Intervals
+     (Self : in out Connection_State_Listener;
+      Map  : Piece_Interval_Array) is abstract;
+
+   not overriding procedure Interval_Saved
+     (Self  : in out Connection_State_Listener;
+      Piece : Positive;
+      Value : Interval;
+      Last  : out Boolean) is abstract;
+
+   not overriding procedure Piece_Completed
+     (Self  : in out Connection_State_Listener;
+      Piece : Positive;
+      Ok    : Boolean) is abstract;
 
    type Connection
      (Meta        : not null Torrent.Metainfo_Files.Metainfo_File_Access;
@@ -83,6 +112,13 @@ private
 
    type Request_Queue is array (1 .. 4) of Request;
 
+   type Natural_Array is array (Positive range <>) of Natural;
+
+   type Sent_Piece_Intervals (Length : Piece_Interval_Count := 0) is record
+      Request : Piece_Intervals (Length);
+      Expire  : Natural_Array (1 .. Length);
+   end record;
+
    type Connection
      (Meta        : not null Torrent.Metainfo_Files.Metainfo_File_Access;
       Storage     : not null Torrent.Storages.Storage_Access;
@@ -103,6 +139,7 @@ private
       My_Peer_Id     : SHA1;
       Unparsed       : League.Stream_Element_Vectors.Stream_Element_Vector :=
         League.Stream_Element_Vectors.Empty_Stream_Element_Vector;
+      Pipelined      : Sent_Piece_Intervals;
       Requests       : Request_Queue;
       Last_Request   : Natural;
       Listener       : Connection_State_Listener_Access;

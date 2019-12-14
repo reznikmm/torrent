@@ -5,17 +5,25 @@
 -------------------------------------------------------------
 
 with Ada.Calendar;
+with Ada.Exceptions;
 with Ada.Text_IO;
 with Ada.Unchecked_Conversion;
 
 with Interfaces;
-with Ada.Exceptions;
+
+with GNAT.SHA1;
 
 package body Torrent.Connections is
 
    use type Ada.Streams.Stream_Element;
    use type Ada.Streams.Stream_Element_Array;
    use type Ada.Streams.Stream_Element_Offset;
+
+   subtype Int_Buffer is Ada.Streams.Stream_Element_Array (1 .. 4);
+   function To_Int (Value : Natural) return Int_Buffer;
+
+   Expire_Loops : constant := 3;
+   --  Protection from lost of requests
 
    Header : constant String := "BitTorrent protocol";
 
@@ -33,9 +41,28 @@ package body Torrent.Connections is
 
    function Get_Handshake (Self : Connection'Class) return Handshake_Image;
 
+   function Get_Int
+     (Data : Ada.Streams.Stream_Element_Array;
+      From : Ada.Streams.Stream_Element_Count := 0) return Natural;
+
+   function Is_Valid_Piece
+     (Self : Connection'Class;
+      Piece : Positive) return Boolean;
+
    procedure Send_Message
      (Self : Connection'Class;
       Data : Ada.Streams.Stream_Element_Array);
+
+   procedure Unreserve_Intervals (Self : in out Connection'Class);
+
+   ---------------
+   -- Connected --
+   ---------------
+
+   function Connected (Self : Connection'Class) return Boolean is
+   begin
+      return not Self.Closed;
+   end Connected;
 
    -------------------
    -- Get_Handshake --
@@ -53,6 +80,23 @@ package body Torrent.Connections is
 
       return +Result;
    end Get_Handshake;
+
+   -------------
+   -- Get_Int --
+   -------------
+
+   function Get_Int
+     (Data : Ada.Streams.Stream_Element_Array;
+      From : Ada.Streams.Stream_Element_Count := 0) return Natural
+   is
+      subtype X is Natural;
+   begin
+      return
+        ((X (Data (Data'First + From)) * 256
+         + X (Data (Data'First + From + 1))) * 256
+         + X (Data (Data'First + From + 2))) * 256
+        + X (Data (Data'First + From + 3));
+   end Get_Int;
 
    ----------------
    -- Initialize --
@@ -81,14 +125,49 @@ package body Torrent.Connections is
       Self.Piece_Map := (others => False);
    end Initialize;
 
-   ---------------
-   -- Connected --
-   ---------------
+   ------------
+   -- Insert --
+   ------------
 
-   function Connected (Self : Connection'Class) return Boolean is
+   procedure Insert
+     (List  : in out Interval_Vectors.Vector;
+      Value : Interval)
+   is
+      M, N : Natural := 0;
+      Next : Interval := Value;
    begin
-      return not Self.Closed;
-   end Connected;
+      if (for some X of List => X.From <= Next.From and X.To >= Next.To) then
+         return;
+      end if;
+
+      loop
+         M := 0;
+         N := 0;
+
+         for J in 1 .. List.Last_Index loop
+            if List (J).To + 1 = Next.From then
+               M := J;
+               exit;
+            elsif Next.To + 1 = List (J).From then
+               N := J;
+               exit;
+            end if;
+         end loop;
+
+         if M > 0 then
+            Next := (List (M).From, Next.To);
+            List.Swap (M, List.Last_Index);
+            List.Delete_Last;
+         elsif N > 0 then
+            Next := (Next.From, List (N).To);
+            List.Swap (N, List.Last_Index);
+            List.Delete_Last;
+         else
+            List.Append (Next);
+            exit;
+         end if;
+      end loop;
+   end Insert;
 
    ---------------
    -- Intrested --
@@ -99,17 +178,43 @@ package body Torrent.Connections is
       return not Self.Closed and Self.He_Intrested;
    end Intrested;
 
-   ----------------
-   -- Set_Choked --
-   ----------------
+   --------------------
+   -- Is_Valid_Piece --
+   --------------------
 
-   procedure Set_Choked (Self : in out Connection'Class; Value : Boolean) is
+   function Is_Valid_Piece
+     (Self  : Connection'Class;
+      Piece : Positive) return Boolean
+   is
+      Context : GNAT.SHA1.Context;
+      From    : Ada.Streams.Stream_Element_Offset :=
+        Piece_Offset (Piece - 1) * Self.Meta.Piece_Length;
+      Left    : Ada.Streams.Stream_Element_Offset;
+      Data    : Ada.Streams.Stream_Element_Array (1 .. 4096);
+      Value   : SHA1;
    begin
-      if Self.He_Choked /= Value then
-         Self.He_Choked := Value;
-         Self.Choked_Sent := False;
+      if Piece = Self.Meta.Piece_Count then
+         Left := Self.Meta.Last_Piece_Length;
+      else
+         Left := Self.Meta.Piece_Length;
       end if;
-   end Set_Choked;
+
+      while Left > Data'Length loop
+         Self.Storage.Read (From, Data);
+         From := From + Data'Length;
+         Left := Left - Data'Length;
+         GNAT.SHA1.Update (Context, Data);
+      end loop;
+
+      if Left > 0 then
+         Self.Storage.Read (From, Data (1 .. Left));
+         GNAT.SHA1.Update (Context, Data (1 .. Left));
+      end if;
+
+      Value := GNAT.SHA1.Digest (Context);
+
+      return Self.Meta.Piece_SHA1 (Piece) = Value;
+   end Is_Valid_Piece;
 
    ------------------
    -- Send_Message --
@@ -126,12 +231,21 @@ package body Torrent.Connections is
          Item   => Data,
          Last   => Last);
 
-      Ada.Text_IO.Put_Line
-        ("Send "
-         & GNAT.Sockets.Image (Self.Peer)
-         & (Data (Data'First + 4)'Img));
-
       pragma Assert (Last = Data'Last);
+
+      if Data (Data'First + 4) = 6 then
+         Ada.Text_IO.Put_Line
+           ("Send request "
+            & GNAT.Sockets.Image (Self.Peer)
+            & Integer'Image (Get_Int (Data, 5) + 1)
+            & Integer'Image (Get_Int (Data, 9))
+            & Integer'Image (Get_Int (Data, 13)));
+      else
+         Ada.Text_IO.Put_Line
+           ("Send "
+            & GNAT.Sockets.Image (Self.Peer)
+            & (Data (Data'First + 4)'Img));
+      end if;
    end Send_Message;
 
    -----------
@@ -146,7 +260,7 @@ package body Torrent.Connections is
 
       procedure Connect_And_Send_Handshake;
       procedure Check_Intrested;
-      procedure Send_Requests;
+      procedure Send_Initial_Requests;
       function Get_Handshake
         (Data : Ada.Streams.Stream_Element_Array) return Boolean;
 
@@ -272,23 +386,8 @@ package body Torrent.Connections is
 
       procedure On_Message (Data : Ada.Streams.Stream_Element_Array) is
          function Get_Int
-           (From : Ada.Streams.Stream_Element_Count := 0) return Natural;
-
-         -------------
-         -- Get_Int --
-         -------------
-
-         function Get_Int
            (From : Ada.Streams.Stream_Element_Count := 0) return Natural
-         is
-            subtype X is Natural;
-         begin
-            return
-              ((X (Data (Data'First + From)) * 256
-               + X (Data (Data'First + From + 1))) * 256
-               + X (Data (Data'First + From + 2))) * 256
-               + X (Data (Data'First + From + 3));
-         end Get_Int;
+             is (Get_Int (Data, From));
 
          Index : Natural;
       begin
@@ -298,10 +397,11 @@ package body Torrent.Connections is
             when 0 =>  --  choke
                Ada.Text_IO.Put_Line ("choke");
                Self.We_Choked := True;
+               Self.Unreserve_Intervals;
             when 1 =>  -- unchoke
                Ada.Text_IO.Put_Line ("unchoke");
                Self.We_Choked := False;
-               Send_Requests;
+               Send_Initial_Requests;
             when 2 =>  -- interested
                Ada.Text_IO.Put_Line ("interested");
                Self.He_Intrested := True;
@@ -450,65 +550,159 @@ package body Torrent.Connections is
       procedure Save_Piece
         (Index  : Positive;
          Offset : Natural;
-         Data   : Ada.Streams.Stream_Element_Array) is
+         Data   : Ada.Streams.Stream_Element_Array)
+      is
+         procedure Swap (Left, Right : Piece_Interval_Count);
+
+         ----------
+         -- Swap --
+         ----------
+
+         procedure Swap (Left, Right : Piece_Interval_Count) is
+            Request : constant Piece_Interval :=
+              Self.Pipelined.Request.List (Left);
+            Expire : constant Natural := Self.Pipelined.Expire (Left);
+         begin
+            Self.Pipelined.Request.List (Left) :=
+              Self.Pipelined.Request.List (Right);
+            Self.Pipelined.Request.List (Right) := Request;
+            Self.Pipelined.Expire (Left) := Self.Pipelined.Expire (Right);
+            Self.Pipelined.Expire (Right) := Expire;
+         end Swap;
+
+         Last : Boolean;
+         From : constant Piece_Offset := Piece_Offset (Offset);
       begin
          Self.Storage.Write
            (Offset => Ada.Streams.Stream_Element_Count (Index - 1)
                         * Self.Meta.Piece_Length
                       + Ada.Streams.Stream_Element_Count (Offset),
-            Data => Data);
+            Data   => Data);
+
+         Self.Listener.Interval_Saved
+           (Index, (From, From + Data'Length - 1), Last);
+
+         if Last then
+            if Self.Is_Valid_Piece (Index) then
+               Self.Listener.Piece_Completed (Index, True);
+               Self.Send_Message
+                 ((00, 00, 00, 05, 04) &   --  have
+                    To_Int (Index - 1));
+            else
+               Self.Listener.Piece_Completed (Index, False);
+            end if;
+         end if;
+
+         if Self.Current_Piece.Intervals.Is_Empty then
+            Self.Listener.Reserve_Intervals
+              (Map   => Self.Piece_Map,
+               Value => Self.Current_Piece);
+         end if;
+
+         for J in 1 .. Self.Pipelined.Length loop
+            if Self.Pipelined.Request.List (J).Piece = Index
+              and Self.Pipelined.Request.List (J).Span.From = From
+            then
+               if Self.Current_Piece.Intervals.Is_Empty then
+                  Swap (J, Self.Pipelined.Length);
+
+                  Self.Pipelined :=
+                    (Self.Pipelined.Length - 1,
+                     Request =>
+                       (Self.Pipelined.Length - 1,
+                        Self.Pipelined.Request.List
+                          (1 .. Self.Pipelined.Length - 1)),
+                     Expire  => Self.Pipelined.Expire
+                       (1 .. Self.Pipelined.Length - 1));
+               else
+                  declare
+                     Last : constant Interval :=
+                       Self.Current_Piece.Intervals.Last_Element;
+                  begin
+                     Self.Current_Piece.Intervals.Delete_Last;
+
+                     Self.Pipelined.Request.List (J) :=
+                       (Self.Current_Piece.Piece, Last);
+
+                     Self.Pipelined.Expire (J) :=
+                       Self.Pipelined.Length * Expire_Loops;
+
+                     Self.Send_Message
+                       ((00, 00, 00, 13, 06) &
+                          To_Int (Self.Current_Piece.Piece - 1) &
+                          To_Int (Natural (Last.From)) &
+                          To_Int (Natural (Last.To - Last.From + 1)));
+                  end;
+               end if;
+
+            else  --  Check if some request was lost
+               Self.Pipelined.Expire (J) := Self.Pipelined.Expire (J) - 1;
+
+               if Self.Pipelined.Expire (J) = 0 then
+                  Ada.Text_IO.Put_Line ("Re-send lost request:");
+
+                  Self.Pipelined.Expire (J) :=
+                    Self.Pipelined.Length * Expire_Loops;
+
+                  Self.Send_Message
+                    ((00, 00, 00, 13, 06) &
+                       To_Int (Self.Pipelined.Request.List (J).Piece - 1) &
+                       To_Int (Natural (Self.Pipelined.Request.List (J)
+                                             .Span.From)) &
+                       To_Int (Natural (Self.Pipelined.Request.List (J)
+                                             .Span.To
+                                        - Self.Pipelined.Request.List (J)
+                                             .Span.From + 1)));
+               end if;
+
+            end if;
+         end loop;
       end Save_Piece;
 
-      -------------------
-      -- Send_Requests --
-      -------------------
+      ---------------------------
+      -- Send_Initial_Requests --
+      ---------------------------
 
-      procedure Send_Requests is
-         subtype Int_Buffer is Ada.Streams.Stream_Element_Array (1 .. 4);
-         function Get_Int (Value : Natural) return Int_Buffer;
-
-         -------------
-         -- Get_Int --
-         -------------
-
-         function Get_Int (Value : Natural) return Int_Buffer is
-            use type Interfaces.Unsigned_32;
-            Result : Int_Buffer;
-            Next : Interfaces.Unsigned_32 := Interfaces.Unsigned_32 (Value);
-         begin
-            for X of reverse Result loop
-               X := Ada.Streams.Stream_Element (Next mod 256);
-               Next := Interfaces.Shift_Right (Next, 8);
-            end loop;
-            return Result;
-         end Get_Int;
+      procedure Send_Initial_Requests is
+         Length : Piece_Interval_Count;
       begin
          if Self.Current_Piece.Intervals.Is_Empty then
             Self.Listener.Reserve_Intervals
-              (Connection => Self'Unchecked_Access,
-               Map        => Self.Piece_Map,
+              (Map        => Self.Piece_Map,
                Value      => Self.Current_Piece);
          end if;
 
-         for J in reverse 1 .. Self.Current_Piece.Intervals.Last_Index loop
+         Length := Piece_Interval_Count'Min
+           (Piece_Interval_Count'Last,
+            Self.Current_Piece.Intervals.Last_Index);
+
+         Self.Pipelined :=
+           (Length => Length,
+            Expire => (1 .. Length => Length * Expire_Loops),
+            Request => (Length, others => <>));
+
+         for J in 1 .. Length loop
             declare
+               Last   : constant Interval :=
+                 Self.Current_Piece.Intervals.Last_Element;
                Index  : constant Positive := Self.Current_Piece.Piece;
-               Offset : constant Piece_Offset :=
-                 Self.Current_Piece.Intervals (J).From;
-               Length : constant Piece_Offset :=
-                 Self.Current_Piece.Intervals (J).To - Offset + 1;
+               Offset : constant Piece_Offset := Last.From;
+               Length : constant Piece_Offset := Last.To - Offset + 1;
             begin
                Self.Send_Message
                  ((00, 00, 00, 13, 06) &
-                    Get_Int (Index - 1) &
-                    Get_Int (Natural (Offset)) &
-                    Get_Int (Natural (Length)));
-               --  FIXME Check buffer full
+                    To_Int (Index - 1) &
+                    To_Int (Natural (Offset)) &
+                    To_Int (Natural (Length)));
+
+               Self.Pipelined.Request.List (J) :=
+                 (Piece => Self.Current_Piece.Piece,
+                  Span  => (Offset, Last.To));
+
+               Self.Current_Piece.Intervals.Delete_Last;
             end;
          end loop;
-
-         Self.Current_Piece.Intervals.Clear;
-      end Send_Requests;
+      end Send_Initial_Requests;
 
       Limit : constant Ada.Calendar.Time := Ada.Calendar.Clock + Time;
       Last  : Ada.Streams.Stream_Element_Count := Self.Unparsed.Length;
@@ -553,6 +747,7 @@ package body Torrent.Connections is
                  ("Closed on Read:" & GNAT.Sockets.Image (Self.Peer));
                GNAT.Sockets.Close_Socket (Self.Socket);
                Self.Closed := True;
+               Self.Unreserve_Intervals;
                return;
             else
                Ada.Text_IO.Put ("Read:" & GNAT.Sockets.Image (Self.Peer));
@@ -576,6 +771,7 @@ package body Torrent.Connections is
 
                   GNAT.Sockets.Close_Socket (Self.Socket);
                   Self.Closed := True;
+                  Self.Unreserve_Intervals;
                   return;
                end if;
          end;
@@ -607,7 +803,55 @@ package body Torrent.Connections is
          Ada.Text_IO.Put_Line
            (Ada.Exceptions.Exception_Information (E));
          Self.Closed := True;
+         Self.Unreserve_Intervals;
          return;
    end Serve;
+
+   ----------------
+   -- Set_Choked --
+   ----------------
+
+   procedure Set_Choked (Self : in out Connection'Class; Value : Boolean) is
+   begin
+      if Self.He_Choked /= Value then
+         Self.He_Choked := Value;
+         Self.Choked_Sent := False;
+      end if;
+   end Set_Choked;
+
+   -------------
+   -- To_Int --
+   -------------
+
+   function To_Int (Value : Natural) return Int_Buffer is
+      use type Interfaces.Unsigned_32;
+      Result : Int_Buffer;
+      Next : Interfaces.Unsigned_32 := Interfaces.Unsigned_32 (Value);
+   begin
+      for X of reverse Result loop
+         X := Ada.Streams.Stream_Element (Next mod 256);
+         Next := Interfaces.Shift_Right (Next, 8);
+      end loop;
+      return Result;
+   end To_Int;
+
+   -------------------------
+   -- Unreserve_Intervals --
+   -------------------------
+
+   procedure Unreserve_Intervals (Self : in out Connection'Class) is
+      Back : Piece_Interval_Array
+        (1 .. Self.Current_Piece.Intervals.Last_Index);
+   begin
+      for J in Back'Range loop
+         Back (J).Piece := Self.Current_Piece.Piece;
+         Back (J).Span := Self.Current_Piece.Intervals (J);
+      end loop;
+
+      Self.Listener.Unreserve_Intervals (Self.Pipelined.Request.List & Back);
+
+      Self.Current_Piece := (0, Interval_Vectors.Empty_Vector);
+      Self.Pipelined := (0, Request => (0, others => <>), Expire => <>);
+   end Unreserve_Intervals;
 
 end Torrent.Connections;

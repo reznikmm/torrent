@@ -78,6 +78,16 @@ package body Torrent.Metainfo_Files is
       return Self.Data.Info_Hash;
    end Info_Hash;
 
+   -----------------------
+   -- Last_Piece_Length --
+   -----------------------
+
+   not overriding function Last_Piece_Length
+     (Self : Metainfo_File) return Piece_Offset is
+   begin
+      return Self.Data.Last_Piece;
+   end Last_Piece_Length;
+
    ----------
    -- Name --
    ----------
@@ -417,9 +427,20 @@ package body Torrent.Metainfo_Files is
                   Result.Hashes (J) (K) := Pieces.Element (Index);
                end loop;
 
+               Piece_Length := 0;
+
                for J in 1 .. Files.Last_Index loop
                   Result.Files (J) := Files.Element (J);
+                  Piece_Length := Piece_Length + Files.Element (J).Length;
                end loop;
+
+               Piece_Length := Piece_Length mod Result.Piece_Length;
+
+               if Piece_Length = 0 then
+                  Result.Last_Piece := Result.Piece_Length;
+               else
+                  Result.Last_Piece := Piece_Length;
+               end if;
             end loop;
          end return;
       end Parse_Top_Dictionary;

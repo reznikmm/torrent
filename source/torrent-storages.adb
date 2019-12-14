@@ -98,7 +98,8 @@ package body Torrent.Storages is
             Ada.Streams.Stream_IO.Open
               (Input,
                Ada.Streams.Stream_IO.In_File,
-               Name.To_UTF_8_String);
+               Name.To_UTF_8_String,
+               Form => "shared=no");
 
             Ada.Streams.Stream_IO.Read
               (File => Input,

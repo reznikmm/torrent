@@ -4,6 +4,7 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
+with Ada.Containers.Ordered_Maps;
 with Ada.Containers.Vectors;
 with Ada.Finalization;
 
@@ -38,30 +39,45 @@ private
 
    type Tracker_Response_Access is access Torrent.Trackers.Response;
 
-   package Piece_State_Vectors is new Ada.Containers.Vectors
-     (Index_Type   => Positive,
-      Element_Type => Torrent.Connections.Piece_State,
-      "="          => Torrent.Connections."=");
+   package Piece_State_Maps is new Ada.Containers.Ordered_Maps
+     (Key_Type     => Positive,
+      Element_Type => Torrent.Connections.Interval_Vectors.Vector,
+      "<"          => "<",
+      "="          => Torrent.Connections.Interval_Vectors."=");
 
    protected type Tracked_Pieces (Piece_Count : Positive) is
       new Torrent.Connections.Connection_State_Listener with
 
-      procedure Initialize (Piece_Size_Value : Piece_Offset);
+      procedure Initialize
+        (Piece_Length      : Piece_Offset;
+         Last_Piece_Length : Piece_Offset);
 
       overriding procedure Reserve_Intervals
-        (Connection : Torrent.Connections.Connection_Access;
-         Map        : Boolean_Array;
+        (Map        : Boolean_Array;
          Value      : out Torrent.Connections.Piece_State);
 
       overriding function We_Are_Intrested
         (Map : Boolean_Array) return Boolean;
+
+      overriding procedure Interval_Saved
+        (Piece : Positive;
+         Value : Torrent.Connections.Interval;
+         Last  : out Boolean);
+
+      overriding procedure Piece_Completed
+        (Piece : Positive;
+         Ok    : Boolean);
+
+      overriding procedure Unreserve_Intervals
+        (Value : Torrent.Connections.Piece_Interval_Array);
 
    private
       Our_Map         : Boolean_Array (1 .. Piece_Count) := (others => False);
       Piece_Size      : Piece_Offset;
       Last_Piece_Size : Piece_Offset;
 
-      Unfinished : Piece_State_Vectors.Vector;
+      Finished   : Piece_State_Maps.Map;
+      Unfinished : Piece_State_Maps.Map;
    end Tracked_Pieces;
 
    type Downloader
@@ -78,7 +94,7 @@ private
          Uploaded         : Ada.Streams.Stream_Element_Count;
          Downloaded       : Ada.Streams.Stream_Element_Count;
          Left             : Ada.Streams.Stream_Element_Count;
-         Last_Piece_Size  : Positive;
+--         Last_Piece_Size  : Positive;
          Chocked          : Connection_Vectors.Vector;
 
          Storage : aliased Torrent.Storages.Storage (Meta, File_Count);

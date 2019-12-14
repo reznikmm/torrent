@@ -209,7 +209,6 @@ package body Torrent.Downloaders is
          Value := (1 .. Value'Last => 33);
       end Set_Peer_Id;
 
-      Last_Piece_Size : Ada.Streams.Stream_Element_Count;
       URL : League.IRIs.IRI;
    begin
       Set_Peer_Id (Self.Peer_Id);
@@ -225,15 +224,8 @@ package body Torrent.Downloaders is
          Self.Left := Self.Left + Self.Meta.File_Length (J);
       end loop;
 
-      Last_Piece_Size := Self.Left mod Self.Meta.Piece_Length;
-
-      if Last_Piece_Size = 0 then
-         Last_Piece_Size := Self.Meta.Piece_Length;
-      end if;
-
-      Self.Tracked.Initialize (Self.Meta.Piece_Length);
-
-      Self.Last_Piece_Size := Positive (Last_Piece_Size);
+      Self.Tracked.Initialize
+        (Self.Meta.Piece_Length, Self.Meta.Last_Piece_Length);
 
       URL := Trackers.Event_URL
         (Tracker    => Self.Meta.Announce,
@@ -299,61 +291,131 @@ package body Torrent.Downloaders is
 
    protected body Tracked_Pieces is
 
-      procedure Initialize (Piece_Size_Value : Piece_Offset) is
+      function Get_Piece_Size (Piece : Positive) return Piece_Offset;
+
+      --------------------
+      -- Get_Piece_Size --
+      --------------------
+
+      function Get_Piece_Size (Piece : Positive) return Piece_Offset is
       begin
-         Piece_Size := Piece_Size_Value;
+         if Piece = Piece_Count then
+            return Last_Piece_Size;
+         else
+            return Piece_Size;
+         end if;
+      end Get_Piece_Size;
+
+      procedure Initialize
+        (Piece_Length      : Piece_Offset;
+         Last_Piece_Length : Piece_Offset)
+      is
+      begin
+         Piece_Size := Piece_Length;
+         Last_Piece_Size := Last_Piece_Length;
       end Initialize;
+
+      --------------------
+      -- Interval_Saved --
+      --------------------
+
+      procedure Interval_Saved
+        (Piece : Positive;
+         Value : Torrent.Connections.Interval;
+         Last  : out Boolean)
+      is
+         use type Torrent.Connections.Interval;
+         use type Piece_Offset;
+         Cursor : constant Piece_State_Maps.Cursor := Finished.Find (Piece);
+      begin
+         if Piece_State_Maps.Has_Element (Cursor) then
+            Torrent.Connections.Insert (Finished (Cursor), Value);
+
+            Last := Finished (Cursor).Last_Index = 1
+              and then Finished (Cursor).Last_Element =
+                (0, Get_Piece_Size (Piece) - 1);
+
+            return;
+         end if;
+
+         Finished.Insert
+           (Piece,
+            Torrent.Connections.Interval_Vectors.To_Vector
+              (Value, Length => 1));
+
+         Last := Value = (0, Get_Piece_Size (Piece) - 1);
+      end Interval_Saved;
+
+      ---------------------
+      -- Piece_Completed --
+      ---------------------
+
+      procedure Piece_Completed
+        (Piece : Positive;
+         Ok    : Boolean) is
+      begin
+         Ada.Text_IO.Put_Line
+           ("Piece_Completed" & (Piece'Img) & " " & (Ok'Img));
+
+         Our_Map (Piece) := Ok;
+
+         Finished.Delete (Piece);
+         Unfinished.Delete (Piece);
+
+      end Piece_Completed;
 
       -----------------------
       -- Reserve_Intervals --
       -----------------------
 
       procedure Reserve_Intervals
-        (Connection : Torrent.Connections.Connection_Access;
-         Map        : Boolean_Array;
+        (Map        : Boolean_Array;
          Value      : out Torrent.Connections.Piece_State)
       is
          use type Ada.Streams.Stream_Element_Offset;
          Item_Size : constant := 16 * 1024;
 
          procedure Get_Intervals
-           (Item : in out Torrent.Connections.Piece_State);
+           (Item : in out Torrent.Connections.Interval_Vectors.Vector);
 
          -------------------
          -- Get_Intervals --
          -------------------
 
          procedure Get_Intervals
-           (Item : in out Torrent.Connections.Piece_State) is
+           (Item : in out Torrent.Connections.Interval_Vectors.Vector) is
          begin
-            Value.Piece := Item.Piece;
-
-            while not Item.Intervals.Is_Empty loop
+            while not Item.Is_Empty loop
                declare
                   Last : Torrent.Connections.Interval :=
-                    Item.Intervals.Last_Element;
+                    Item.Last_Element;
                begin
-                  while Last.To - Last.From > Item_Size loop
+                  while Last.To - Last.From + 1 > Item_Size loop
                      Value.Intervals.Append
                        ((Last.From, Last.From + Item_Size - 1));
 
                      Last.From := Last.From + Item_Size;
 
                      if Value.Intervals.Last_Index >= 16 then
-                        Item.Intervals (Item.Intervals.Last_Index) := Last;
+                        Item (Item.Last_Index) := Last;
                         return;
                      end if;
                   end loop;
 
                   Value.Intervals.Append (Last);
-                  Item.Intervals.Delete_Last;
+                  Item.Delete_Last;
                end;
             end loop;
          end Get_Intervals;
       begin
-         for Item of Unfinished loop
-            if not Item.Intervals.Is_Empty and then Map (Item.Piece) then
-               Get_Intervals (Item);
+         Value.Intervals.Clear;
+
+         for Item in Unfinished.Iterate loop
+            if not Unfinished (Item).Is_Empty
+              and then Map (Piece_State_Maps.Key (Item))
+            then
+               Value.Piece := Piece_State_Maps.Key (Item);
+               Get_Intervals (Unfinished (Item));
                return;
             end if;
          end loop;
@@ -361,13 +423,12 @@ package body Torrent.Downloaders is
          for J in Map'Range loop
             if not Our_Map (J)
               and then Map (J)
-              and then not (for some X of Unfinished => X.Piece = J)
+              and then not Unfinished.Contains (J)
             then
-               Unfinished.Append
-                 ((Piece => J,
-                   Intervals => Torrent.Connections.Interval_Vectors.To_Vector
-                     ((0, Piece_Size - 1), 1)));  ---  FIXME Last_Piece_Size
-               Reserve_Intervals (Connection, Map, Value);
+               Unfinished.Insert
+                 (J, Torrent.Connections.Interval_Vectors.To_Vector
+                    ((0, Get_Piece_Size (J) - 1), Length => 1));
+               Reserve_Intervals (Map, Value);
                return;
             end if;
          end loop;
@@ -382,6 +443,24 @@ package body Torrent.Downloaders is
       begin
          return (Map and not Our_Map) /= (1 .. Piece_Count => False);
       end We_Are_Intrested;
+
+      -------------------------
+      -- Unreserve_Intervals --
+      -------------------------
+
+      procedure Unreserve_Intervals
+        (Value : Torrent.Connections.Piece_Interval_Array) is
+      begin
+         for J of Value loop
+            if Unfinished.Contains (J.Piece) then
+               Unfinished (J.Piece).Append (J.Span);
+            else
+               Unfinished.Insert
+                 (J.Piece,
+                  Torrent.Connections.Interval_Vectors.To_Vector (J.Span, 1));
+            end if;
+         end loop;
+      end Unreserve_Intervals;
 
    end Tracked_Pieces;
 

@@ -35,7 +35,11 @@ package Torrent.Metainfo_Files is
 
    not overriding function Piece_Length
      (Self : Metainfo_File) return Piece_Offset;
-   --  The number of bytes in each piece the file is split into.
+   --  The number of bytes in each piece the file is split into (except last).
+
+   not overriding function Last_Piece_Length
+     (Self : Metainfo_File) return Piece_Offset;
+   --  The number of bytes in the last piece.
 
    not overriding function Piece_Count (Self : Metainfo_File) return Positive;
    --  Number of pieces
@@ -84,6 +88,7 @@ private
       Announce     : League.IRIs.IRI;
       Name         : League.Strings.Universal_String;
       Piece_Length : Piece_Offset;
+      Last_Piece   : Piece_Offset;
       Info_Hash    : SHA1;
       Hashes       : SHA1_Array (1 .. Piece_Count);
       Files        : File_Information_Array (1 .. File_Count);
