@@ -19,6 +19,8 @@ with League.IRIs;
 
 package body Torrent.Downloaders is
 
+   use type Ada.Streams.Stream_Element_Offset;
+
    type Connection_Access_Array is
      array (Positive range <>) of Torrent.Connections.Connection_Access;
 
@@ -37,6 +39,7 @@ package body Torrent.Downloaders is
          Value      : not null Torrent.Connections.Connection_Access);
 
       entry Stop_Seeding;
+      entry Stop;
    end Session;
 
    task Manager is
@@ -49,6 +52,7 @@ package body Torrent.Downloaders is
       entry Connect
         (Downloader : not null Downloader_Access;
          Value      : not null Torrent.Connections.Connection_Access);
+      entry Stop;
    end Initiator;
 
    ----------------------
@@ -83,13 +87,20 @@ package body Torrent.Downloaders is
       Next :  Torrent.Connections.Connection_Access;
    begin
       loop
-         accept Connect
-           (Downloader : not null Downloader_Access;
-            Value      : not null Torrent.Connections.Connection_Access)
-         do
-            Job := Downloader;
-            Next := Value;
-         end Connect;
+         select
+            accept Stop;
+            exit;
+
+         or
+            accept Connect
+              (Downloader : not null Downloader_Access;
+               Value      : not null Torrent.Connections.Connection_Access)
+            do
+               Job := Downloader;
+               Next := Value;
+            end Connect;
+
+         end select;
 
          begin
             Next.Serve (Job.Completed (1 .. Job.Last_Completed), 0.1);
@@ -110,7 +121,6 @@ package body Torrent.Downloaders is
    -------------
 
    task body Manager is
-      use type Ada.Streams.Stream_Element_Offset;
       use type Torrent.Connections.Connection_Access;
       Job : Downloader_Access;
 
@@ -158,6 +168,13 @@ package body Torrent.Downloaders is
       end loop;
 
       accept Complete;
+
+      for J in Sessions'Range loop
+         Sessions (J).Stop;
+      end loop;
+   exception
+      when E : others =>
+         Ada.Text_IO.Put_Line (Ada.Exceptions.Exception_Information (E));
    end Manager;
 
    -------------
@@ -171,13 +188,20 @@ package body Torrent.Downloaders is
       Conn : Torrent.Connections.Connection_Access;
    begin
       loop
-         accept Seed
-           (Downloader : not null Downloader_Access;
-            Value      : not null Torrent.Connections.Connection_Access)
-         do
-            Job := Downloader;
-            Conn := Value;
-         end Seed;
+         select
+            accept Stop;
+            exit;
+
+         or
+            accept Seed
+              (Downloader : not null Downloader_Access;
+               Value      : not null Torrent.Connections.Connection_Access)
+            do
+               Job := Downloader;
+               Conn := Value;
+            end Seed;
+
+         end select;
 
          if Conn not in null
            and then Conn.Intrested
@@ -213,8 +237,6 @@ package body Torrent.Downloaders is
       Port : Positive;
       Path : League.String_Vectors.Universal_String_Vector)
    is
-      use type Ada.Streams.Stream_Element_Count;
-
       procedure Set_Peer_Id (Value : out SHA1);
 
       -----------------
@@ -248,14 +270,14 @@ package body Torrent.Downloaders is
       Self.Last_Completed := 0;
       Self.Storage.Initialize (Path.Join ('/'));
 
-      Self.Check_Stored_Pieces;
+      Self.Tracked.Initialize
+        (Self.Meta.Piece_Length, Self.Meta.Last_Piece_Length);
 
       for J in 1 .. Self.Meta.File_Count loop
          Self.Left := Self.Left + Self.Meta.File_Length (J);
       end loop;
 
-      Self.Tracked.Initialize
-        (Self.Meta.Piece_Length, Self.Meta.Last_Piece_Length);
+      Self.Check_Stored_Pieces;
 
       URL := Trackers.Event_URL
         (Tracker    => Self.Meta.Announce,
@@ -310,6 +332,7 @@ package body Torrent.Downloaders is
       end loop;
 
       Manager.Complete;
+      Initiator.Stop;
    exception
       when E : others =>
          Ada.Text_IO.Put_Line (Ada.Exceptions.Exception_Information (E));
@@ -355,7 +378,6 @@ package body Torrent.Downloaders is
          Last  : out Boolean)
       is
          use type Torrent.Connections.Interval;
-         use type Piece_Offset;
          Cursor : constant Piece_State_Maps.Cursor := Finished.Find (Piece);
       begin
          if Piece_State_Maps.Has_Element (Cursor) then
@@ -398,6 +420,7 @@ package body Torrent.Downloaders is
          end if;
 
          if Ok then
+            Downloader.Left := Downloader.Left - Get_Piece_Size (Piece);
             Downloader.Completed (Downloader.Last_Completed + 1) := Piece;
             Downloader.Last_Completed := Downloader.Last_Completed + 1;
          end if;
@@ -411,8 +434,6 @@ package body Torrent.Downloaders is
         (Map        : Boolean_Array;
          Value      : out Torrent.Connections.Piece_State)
       is
-         use type Ada.Streams.Stream_Element_Offset;
-         Item_Size : constant := 16 * 1024;
 
          procedure Get_Intervals
            (Item : in out Torrent.Connections.Interval_Vectors.Vector);
@@ -429,11 +450,11 @@ package body Torrent.Downloaders is
                   Last : Torrent.Connections.Interval :=
                     Item.Last_Element;
                begin
-                  while Last.To - Last.From + 1 > Item_Size loop
+                  while Last.To - Last.From + 1 > Max_Interval_Size loop
                      Value.Intervals.Append
-                       ((Last.From, Last.From + Item_Size - 1));
+                       ((Last.From, Last.From + Max_Interval_Size - 1));
 
-                     Last.From := Last.From + Item_Size;
+                     Last.From := Last.From + Max_Interval_Size;
 
                      if Value.Intervals.Last_Index >= 16 then
                         Item (Item.Last_Index) := Last;

@@ -107,18 +107,15 @@ package Torrent.Connections is
 
    function Is_Valid_Piece
      (Meta    : not null Torrent.Metainfo_Files.Metainfo_File_Access;
-      Storage : Torrent.Storages.Storage'Class;
+      Storage : in out Torrent.Storages.Storage;
       Piece   : Piece_Index) return Boolean;
 
 private
 
-   type Request is record
-      Index  : Positive;
-      Offset : Natural;
-      Length : Positive;
-   end record;
-
-   type Request_Queue is array (1 .. 4) of Request;
+   package Piece_Interval_Vectors is new Ada.Containers.Vectors
+     (Index_Type   => Positive,
+      Element_Type => Piece_Interval,
+      "="          => "=");
 
    type Natural_Array is array (Positive range <>) of Natural;
 
@@ -135,6 +132,7 @@ private
    record
       Peer           : GNAT.Sockets.Sock_Addr_Type;
       Socket         : GNAT.Sockets.Socket_Type;
+      Selector       : GNAT.Sockets.Selector_Type;
       Sent_Handshake : Boolean;
       Got_Handshake  : Boolean;
       Closed         : Boolean;
@@ -148,7 +146,7 @@ private
       Unparsed       : League.Stream_Element_Vectors.Stream_Element_Vector :=
         League.Stream_Element_Vectors.Empty_Stream_Element_Vector;
       Pipelined      : Sent_Piece_Intervals;
-      Requests       : Request_Queue;
+      Requests       : Piece_Interval_Vectors.Vector;
       Last_Request   : Natural;
       Last_Completed : Torrent.Piece_Count;
       Listener       : Connection_State_Listener_Access;

@@ -24,4 +24,6 @@ package Torrent is
    type Boolean_Array is array (Piece_Index range <>) of Boolean
      with Pack;
 
+   Max_Interval_Size : constant := 16 * 1024;
+
 end Torrent;
