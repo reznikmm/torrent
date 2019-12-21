@@ -283,6 +283,7 @@ package body Torrent.Metainfo_Files is
          Path   : League.String_Vectors.Universal_String_Vector;
          Length : Ada.Streams.Stream_Element_Count;
       begin
+         Value.Clear;
          Expect (Character'Pos ('l'));
 
          while Buffer (Next) /= Character'Pos ('e') loop
@@ -306,6 +307,7 @@ package body Torrent.Metainfo_Files is
          Key    : League.Strings.Universal_String;
          Length : Ada.Streams.Stream_Element_Count := 0;
       begin
+         Files.Clear;
          SHA_From := Next;  --  Activate SHA1 calculation
          Expect (Character'Pos ('d'));
 
@@ -454,6 +456,7 @@ package body Torrent.Metainfo_Files is
       is
          Len : Ada.Streams.Stream_Element_Count := 0;
       begin
+         Value.Clear;
          while Buffer (Next) in Digit loop
             Len := Len * 10
               + Ada.Streams.Stream_Element_Count (Buffer (Next))
@@ -523,6 +526,7 @@ package body Torrent.Metainfo_Files is
       is
          Text : League.Strings.Universal_String;
       begin
+         Value.Clear;
          Expect (Character'Pos ('l'));
 
          while Buffer (Next) /= Character'Pos ('e') loop
