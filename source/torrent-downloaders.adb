@@ -5,8 +5,14 @@
 -------------------------------------------------------------
 
 with Ada.Calendar.Formatting;
+with Ada.Containers.Hashed_Sets;
+with Ada.Containers.Ordered_Sets;
 with Ada.Exceptions;
 with Ada.Text_IO;
+with Ada.Unchecked_Deallocation;
+
+with System.Address_To_Access_Conversions;
+with System.Storage_Elements;
 
 with GNAT.SHA1;
 with GNAT.Sockets;
@@ -16,6 +22,8 @@ with AWS.Client;
 with AWS.Messages;
 
 with League.IRIs;
+
+with Torrent.Handshakes;
 
 package body Torrent.Downloaders is
 
@@ -32,6 +40,18 @@ package body Torrent.Downloaders is
 
    type Downloader_Access is access all Downloader'Class
      with Storage_Size => 0;
+
+   package Downloader_Maps is new Ada.Containers.Ordered_Maps
+     (Key_Type     => SHA1,
+      Element_Type => Downloader_Access,
+      "<"          => Ada.Streams."<",
+      "="          => "=");
+
+   function Find_Download (Hash : SHA1) return Downloader_Access;
+
+   procedure Free is new Ada.Unchecked_Deallocation
+     (Torrent.Connections.Connection'Class,
+      Torrent.Connections.Connection_Access);
 
    task type Session is
       entry Seed
@@ -54,6 +74,10 @@ package body Torrent.Downloaders is
          Value      : not null Torrent.Connections.Connection_Access);
       entry Stop;
    end Initiator;
+
+   Port : constant := 33411;
+
+   Downloader_List : Downloader_Maps.Map;
 
    ----------------------
    -- Best_Connections --
@@ -78,14 +102,202 @@ package body Torrent.Downloaders is
       end loop;
    end Best_Connections;
 
+   -------------------
+   -- Find_Download --
+   -------------------
+
+   function Find_Download (Hash : SHA1) return Downloader_Access is
+      Cursor : constant Downloader_Maps.Cursor := Downloader_List.Find (Hash);
+   begin
+      if Downloader_Maps.Has_Element (Cursor) then
+         return Downloader_Maps.Element (Cursor);
+      else
+         return null;
+      end if;
+   end Find_Download;
+
    ---------------
    -- Initiator --
    ---------------
 
    task body Initiator is
-      Job  : Downloader_Access;
-      Next :  Torrent.Connections.Connection_Access;
+      type Socket_Connection is record
+         Socket : GNAT.Sockets.Socket_Type;
+         Item   : Torrent.Connections.Connection_Access;
+         Job    : Downloader_Access;
+      end record;
+
+      package Socket_Connection_Vectors is new Ada.Containers.Vectors
+        (Positive, Socket_Connection);
+
+      type Planned_Connection is record
+         Time : Ada.Calendar.Time;
+         Item : Torrent.Connections.Connection_Access;
+         Job  : Downloader_Access;
+      end record;
+
+      function Less (Left, Right : Planned_Connection) return Boolean;
+
+      package Planned_Connection_Sets is new Ada.Containers.Ordered_Sets
+        (Element_Type => Planned_Connection,
+         "<"          => Less);
+
+      type Accepted_Connection is record
+         Socket  : GNAT.Sockets.Socket_Type;
+         Data    : Torrent.Handshakes.Handshake_Image;
+         Last    : Ada.Streams.Stream_Element_Count;
+         Done    : Boolean;
+         Session : Torrent.Connections.Connection_Access;
+      end record;
+
+      package Accepted_Connection_Vectors is new Ada.Containers.Vectors
+        (Positive, Accepted_Connection);
+
+      procedure Accept_Connection
+        (Server   : GNAT.Sockets.Socket_Type;
+         Accepted : in out Accepted_Connection_Vectors.Vector);
+
+      procedure Read_Handshake (Item : in out Accepted_Connection);
+
+      function Hash (Item : Torrent.Connections.Connection_Access)
+        return Ada.Containers.Hash_Type;
+
+      package Connection_Sets is new Ada.Containers.Hashed_Sets
+        (Element_Type        => Torrent.Connections.Connection_Access,
+         Hash                => Hash,
+         Equivalent_Elements => Torrent.Connections."=",
+         "="                 => Torrent.Connections."=");
+
+      function "+"
+        (Value : Torrent.Connections.Connection_Access)
+            return System.Storage_Elements.Integer_Address;
+
+      ---------
+      -- "+" --
+      ---------
+
+      function "+"
+        (Value : Torrent.Connections.Connection_Access)
+            return System.Storage_Elements.Integer_Address
+      is
+         package Conv is new System.Address_To_Access_Conversions
+           (Object => Torrent.Connections.Connection'Class);
+      begin
+         return System.Storage_Elements.To_Integer
+           (Conv.To_Address (Conv.Object_Pointer (Value)));
+      end "+";
+
+      -----------------------
+      -- Accept_Connection --
+      -----------------------
+
+      procedure Accept_Connection
+        (Server   : GNAT.Sockets.Socket_Type;
+         Accepted : in out Accepted_Connection_Vectors.Vector)
+      is
+         Address : GNAT.Sockets.Sock_Addr_Type;
+         Socket  : GNAT.Sockets.Socket_Type;
+      begin
+         GNAT.Sockets.Accept_Socket (Server, Socket, Address);
+         Ada.Text_IO.Put_Line ("Accepted: " & GNAT.Sockets.Image (Address));
+
+         GNAT.Sockets.Set_Socket_Option
+           (Socket => Socket,
+            Level  => GNAT.Sockets.Socket_Level,
+            Option => (GNAT.Sockets.Receive_Timeout, 0.0));
+
+         Accepted.Append ((Socket, Last => 0, Done => False, others => <>));
+      end Accept_Connection;
+
+      ----------
+      -- Hash --
+      ----------
+
+      function Hash (Item : Torrent.Connections.Connection_Access)
+        return Ada.Containers.Hash_Type is
+      begin
+         return Ada.Containers.Hash_Type'Mod (+Item);
+      end Hash;
+
+      ----------
+      -- Less --
+      ----------
+
+      function Less (Left, Right : Planned_Connection) return Boolean is
+         use type Ada.Calendar.Time;
+         use type System.Storage_Elements.Integer_Address;
+
+      begin
+         return Left.Time < Right.Time
+           or else (Left.Time = Right.Time and +Left.Item < +Right.Item);
+      end Less;
+
+      --------------------
+      -- Read_Handshake --
+      --------------------
+
+      procedure Read_Handshake (Item : in out Accepted_Connection) is
+         use Torrent.Handshakes;
+         use type Ada.Streams.Stream_Element;
+         Last : Ada.Streams.Stream_Element_Count;
+         Job  : Downloader_Access;
+      begin
+         GNAT.Sockets.Receive_Socket
+           (Item.Socket,
+            Item.Data (Item.Last + 1 .. Item.Data'Last),
+            Last);
+
+         if Last <= Item.Last then
+            Item.Done := True;  --  Connection closed
+         elsif Last = Item.Data'Last then
+            declare
+               Value : constant Handshake_Type := -Item.Data;
+            begin
+               Job := Find_Download (Value.Info_Hash);
+               Item.Done := True;
+
+               if Value.Length = Header'Length
+                 and then Value.Head = Header
+                 and then Job /= null
+               then
+                  Item.Session := new Torrent.Connections.Connection
+                    (Job.Meta,
+                     Job.Storage'Unchecked_Access,
+                     Job.Meta.Piece_Count);
+               end if;
+            end;
+         else
+            Item.Last := Last;
+         end if;
+      exception
+         when E : GNAT.Sockets.Socket_Error =>
+
+            if GNAT.Sockets.Resolve_Exception (E) not in
+              GNAT.Sockets.Resource_Temporarily_Unavailable
+            then
+               Item.Done := True;
+            end if;
+      end Read_Handshake;
+
+      use type Ada.Calendar.Time;
+
+      Address  : constant GNAT.Sockets.Sock_Addr_Type :=
+        (GNAT.Sockets.Family_Inet, GNAT.Sockets.Any_Inet_Addr, Port);
+      Server   : GNAT.Sockets.Socket_Type;
+      Plan     : Planned_Connection_Sets.Set;
+      Work     : Socket_Connection_Vectors.Vector;
+      Accepted : Accepted_Connection_Vectors.Vector;
+      Inbound  : Connection_Sets.Set;
+      Selector : aliased GNAT.Sockets.Selector_Type;
+      Time     : Ada.Calendar.Time := Ada.Calendar.Clock + 20.0;
+      W_Set    : GNAT.Sockets.Socket_Set_Type;
+      R_Set    : GNAT.Sockets.Socket_Set_Type;
    begin
+      GNAT.Sockets.Create_Selector (Selector);
+      GNAT.Sockets.Create_Socket (Server);
+      GNAT.Sockets.Bind_Socket (Server, Address);
+      GNAT.Sockets.Listen_Socket (Server);
+
       loop
          select
             accept Stop;
@@ -96,24 +308,137 @@ package body Torrent.Downloaders is
               (Downloader : not null Downloader_Access;
                Value      : not null Torrent.Connections.Connection_Access)
             do
-               Job := Downloader;
-               Next := Value;
+               if Inbound.Contains (Value) then
+                  declare
+                     Session : Torrent.Connections.Connection_Access := Value;
+                  begin
+                     Free (Session);
+                     Inbound.Delete (Value);
+                  end;
+               else
+                  Time := Ada.Calendar.Clock;
+                  Plan.Insert ((Time, Value, Downloader));
+               end if;
             end Connect;
-
+         or
+            delay until Time;
          end select;
 
-         begin
-            Next.Serve (Job.Completed (1 .. Job.Last_Completed), 0.1);
+         while not Plan.Is_Empty loop
+            declare
+               Ignore : GNAT.Sockets.Selector_Status;
+               First  : constant Planned_Connection := Plan.First_Element;
+               Socket : GNAT.Sockets.Socket_Type;
+            begin
+               exit when First.Time > Time;
 
-            if Next.Connected then
-               Manager.Connected (Next);
-            end if;
-         exception
-            when E : others =>
                Ada.Text_IO.Put_Line
-                 ("Initiator: " & Ada.Exceptions.Exception_Information (E));
-         end;
+                 ("Connecting: " & GNAT.Sockets.Image (First.Item.Peer));
+
+               GNAT.Sockets.Create_Socket (Socket);
+               GNAT.Sockets.Connect_Socket
+                 (Socket   => Socket,
+                  Server   => First.Item.Peer,
+                  Timeout  => 0.0,
+                  Status   => Ignore);
+               Work.Append ((Socket, First.Item, First.Job));
+               Plan.Delete_First;
+            end;
+         end loop;
+
+         GNAT.Sockets.Empty (W_Set);
+         GNAT.Sockets.Empty (R_Set);
+         GNAT.Sockets.Set (R_Set, Server);
+
+         for J of Accepted loop
+            GNAT.Sockets.Set (R_Set, J.Socket);
+         end loop;
+
+         for J of Work loop
+            GNAT.Sockets.Set (W_Set, J.Socket);
+         end loop;
+
+         if GNAT.Sockets.Is_Empty (W_Set)
+           and GNAT.Sockets.Is_Empty (R_Set)
+         then
+            Time := Ada.Calendar.Clock + 20.0;
+         else
+            declare
+               Status : GNAT.Sockets.Selector_Status;
+            begin
+               GNAT.Sockets.Check_Selector
+                 (Selector,
+                  R_Set,
+                  W_Set,
+                  Status,
+                  Timeout => 0.2);
+
+               if Status in GNAT.Sockets.Completed then
+                  declare
+                     J : Positive := 1;
+                  begin
+                     if GNAT.Sockets.Is_Set (R_Set, Server) then
+                        Accept_Connection (Server, Accepted);
+                     end if;
+
+                     while J <= Accepted.Last_Index loop
+                        if GNAT.Sockets.Is_Set
+                          (R_Set, Accepted (J).Socket)
+                        then
+                           Read_Handshake (Accepted (J));
+
+                           if Accepted (J).Done then
+                              if Accepted (J).Session in null then
+                                 GNAT.Sockets.Close_Socket
+                                   (Accepted (J).Socket);
+                              else
+                                 Inbound.Insert (Accepted (J).Session);
+                                 Manager.Connected (Accepted (J).Session);
+                              end if;
+
+                              Accepted.Swap (J, Accepted.Last_Index);
+                              Accepted.Delete_Last;
+                           else
+                              J := J + 1;
+                           end if;
+                        else
+                           J := J + 1;
+                        end if;
+                     end loop;
+
+                     J := 1;
+
+                     while J <= Work.Last_Index loop
+                        if GNAT.Sockets.Is_Set (W_Set, Work (J).Socket) then
+                           Work (J).Item.Do_Handshake
+                             (Work (J).Socket,
+                              Work (J).Job.Completed
+                                (1 .. Work (J).Job.Last_Completed));
+
+                           if Work (J).Item.Connected then
+                              Manager.Connected (Work (J).Item);
+                           else
+                              Plan.Insert
+                                ((Time + 300.0, Work (J).Item, Work (J).Job));
+                           end if;
+
+                           Work.Swap (J, Work.Last_Index);
+                           Work.Delete_Last;
+                        else
+                           J := J + 1;
+                        end if;
+                     end loop;
+                  end;
+               end if;
+
+               Time := Ada.Calendar.Clock + 5.0;
+            end;
+         end if;
       end loop;
+   exception
+      when E : others =>
+         Ada.Text_IO.Put_Line
+           ("Initiator: " & Ada.Exceptions.Exception_Information (E));
    end Initiator;
 
    -------------
@@ -125,6 +450,7 @@ package body Torrent.Downloaders is
       Job : Downloader_Access;
 
       Sessions : array (1 .. 1) of Session;
+      Slowdown : Duration := 0.5;
    begin
       accept New_Download (Value : not null Downloader_Access) do
          Job := Value;
@@ -136,9 +462,10 @@ package body Torrent.Downloaders is
               (Value : in not null Torrent.Connections.Connection_Access)
             do
                Job.Chocked.Append (Value);
+               Slowdown := 0.0;
             end Connected;
          else
-            delay 0.2;
+            delay Slowdown;
          end select;
 
          declare
@@ -154,7 +481,9 @@ package body Torrent.Downloaders is
 
             --  process chocked connections.
             for J of Job.Chocked loop
-               if J.Connected and then not (for some X of List => X = J) then
+               if not J.Connected then
+                  Initiator.Connect (Job, J);
+               elsif not (for some X of List => X = J) then
                   J.Serve (Job.Completed (1 .. Job.Last_Completed), 0.1);
                end if;
             end loop;
@@ -222,6 +551,7 @@ package body Torrent.Downloaders is
    procedure Check_Stored_Pieces (Self : in out Downloader'Class) is
    begin
       for J in 1 .. Self.Piece_Count loop
+         Ada.Text_IO.Put_Line (J'Img);
          if Connections.Is_Valid_Piece (Self.Meta, Self.Storage, J) then
             Self.Tracked.Piece_Completed (J, True);
          end if;
@@ -234,7 +564,6 @@ package body Torrent.Downloaders is
 
    procedure Start
      (Self : aliased in out Downloader'Class;
-      Port : Positive;
       Path : League.String_Vectors.Universal_String_Vector)
    is
       procedure Set_Peer_Id (Value : out SHA1);
@@ -260,6 +589,8 @@ package body Torrent.Downloaders is
 
       URL : League.IRIs.IRI;
    begin
+      Downloader_List.Insert (Self.Meta.Info_Hash, Self'Unchecked_Access);
+
       Set_Peer_Id (Self.Peer_Id);
       Self.Path := Path;
       Self.Port := Port;
@@ -296,12 +627,20 @@ package body Torrent.Downloaders is
               Follow_Redirection => True);
       begin
          if AWS.Response.Status_Code (Reply) not in AWS.Messages.Success then
+            Ada.Text_IO.Put_Line
+              ("Tracker request failed:"
+               & AWS.Messages.Status_Code'Image
+                 (AWS.Response.Status_Code (Reply)));
+            Ada.Text_IO.Put_Line (URL.To_Universal_String.To_UTF_8_String);
             return;
          end if;
 
          Self.Tracker_Response := new Torrent.Trackers.Response'
            (Trackers.Parse (AWS.Response.Message_Body (Reply)));
       end;
+
+      Ada.Text_IO.Put_Line
+        ("Peer_Count:" & (Self.Tracker_Response.Peer_Count'Img));
 
       Manager.New_Download (Self'Unchecked_Access);
 
@@ -330,6 +669,25 @@ package body Torrent.Downloaders is
             Initiator.Connect (Self'Unchecked_Access, Connection);
          end;
       end loop;
+
+      URL := Trackers.Event_URL
+        (Tracker    => Self.Meta.Announce,
+         Info_Hash  => Self.Meta.Info_Hash,
+         Peer_Id    => Self.Peer_Id,
+         Port       => Self.Port,
+         Uploaded   => Self.Uploaded,
+         Downloaded => Self.Downloaded,
+         Left       => Self.Left,
+         Event      => Trackers.Completed);
+
+      declare
+         Ignore : constant AWS.Response.Data :=
+           AWS.Client.Get
+             (URL.To_Universal_String.To_UTF_8_String,
+              Follow_Redirection => True);
+      begin
+         null;  --  Just notify tracker
+      end;
 
       Manager.Complete;
       Initiator.Stop;
@@ -380,6 +738,9 @@ package body Torrent.Downloaders is
          use type Torrent.Connections.Interval;
          Cursor : constant Piece_State_Maps.Cursor := Finished.Find (Piece);
       begin
+         Downloader.Downloaded := Downloader.Downloaded +
+           Value.To - Value.From + 1;
+
          if Piece_State_Maps.Has_Element (Cursor) then
             Torrent.Connections.Insert (Finished (Cursor), Value);
 

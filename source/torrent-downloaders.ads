@@ -27,7 +27,6 @@ package Torrent.Downloaders is
 
    procedure Start
      (Self : aliased in out Downloader'Class;
-      Port : Positive;
       Path : League.String_Vectors.Universal_String_Vector);
 
 private

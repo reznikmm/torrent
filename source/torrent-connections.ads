@@ -90,6 +90,14 @@ package Torrent.Connections is
       Peer     : GNAT.Sockets.Sock_Addr_Type;
       Listener : Connection_State_Listener_Access);
 
+   type Piece_Index_Array is array (Piece_Index range <>) of Piece_Index;
+
+   procedure Do_Handshake
+     (Self      : in out Connection'Class;
+      Socket    : GNAT.Sockets.Socket_Type;
+      Completed : Piece_Index_Array);
+
+   function Peer (Self : Connection'Class) return GNAT.Sockets.Sock_Addr_Type;
    function Connected (Self : Connection'Class) return Boolean;
    function Intrested (Self : Connection'Class) return Boolean;
    function Speed (Unused : Connection'Class) return Natural is (0);
@@ -97,8 +105,6 @@ package Torrent.Connections is
    procedure Set_Choked
      (Self  : in out Connection'Class;
       Value : Boolean);
-
-   type Piece_Index_Array is array (Piece_Index range <>) of Piece_Index;
 
    procedure Serve
      (Self      : in out Connection'Class;

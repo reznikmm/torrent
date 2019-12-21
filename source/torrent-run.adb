@@ -36,8 +36,6 @@ begin
       Ada.Wide_Wide_Text_IO.Put_Line
         (Meta.Announce.To_Universal_String.To_Wide_Wide_String);
 
-      DL.Start
-        (Port => 12345,
-         Path => Path);
+      DL.Start (Path);
    end;
 end Torrent.Run;

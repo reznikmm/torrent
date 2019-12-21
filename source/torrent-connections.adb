@@ -13,6 +13,8 @@ with Interfaces;
 
 with GNAT.SHA1;
 
+with Torrent.Handshakes; use Torrent.Handshakes;
+
 package body Torrent.Connections is
 
    use type Ada.Streams.Stream_Element;
@@ -24,20 +26,6 @@ package body Torrent.Connections is
 
    Expire_Loops : constant := 3;
    --  Protection from lost of requests
-
-   Header : constant String := "BitTorrent protocol";
-
-   subtype Handshake_Image is Ada.Streams.Stream_Element_Array
-     (1 .. 1 + Header'Length + 8 + 2 * SHA1'Length);
-
-   type Handshake_Type is record
-      Length    : Ada.Streams.Stream_Element := Header'Length;
-      Head      : String (Header'Range) := Header;
-      Zeros     : Ada.Streams.Stream_Element_Array (1 .. 8) := (others => 0);
-      Info_Hash : SHA1;
-      Peer_Id   : SHA1;
-   end record
-     with Pack, Size => 8 * (1 + Header'Length + 8 + 2 * SHA1'Length);
 
    function Get_Handshake (Self : Connection'Class) return Handshake_Image;
 
@@ -87,14 +75,58 @@ package body Torrent.Connections is
       return not Self.Closed;
    end Connected;
 
+   ------------------
+   -- Do_Handshake --
+   ------------------
+
+   procedure Do_Handshake
+     (Self      : in out Connection'Class;
+      Socket    : GNAT.Sockets.Socket_Type;
+      Completed : Piece_Index_Array)
+   is
+      Last   : Ada.Streams.Stream_Element_Count;
+   begin
+      Self.Socket := Socket;
+
+      GNAT.Sockets.Send_Socket
+        (Socket => Self.Socket,
+         Item   => Self.Get_Handshake,
+         Last   => Last);
+
+      pragma Assert (Last = Handshake_Image'Last);
+
+      GNAT.Sockets.Set_Socket_Option
+        (Socket => Self.Socket,
+         Level  => GNAT.Sockets.Socket_Level,
+         Option => (GNAT.Sockets.Receive_Timeout, 0.1));
+
+      GNAT.Sockets.Set_Socket_Option
+        (Socket => Self.Socket,
+         Level  => GNAT.Sockets.Socket_Level,
+         Option => (GNAT.Sockets.Send_Timeout, 0.0));
+
+      GNAT.Sockets.Create_Selector (Self.Selector);
+
+      Self.Initialize (Self.My_Peer_Id, Self.Peer, Self.Listener);
+      Self.Sent_Handshake := True;
+
+      Self.Send_Bitfield (Completed);
+      Self.Last_Completed := Completed'Last;
+   exception
+      when E : others =>
+         Ada.Text_IO.Put_Line
+           ("Raised on Do_Handshake:" & GNAT.Sockets.Image (Self.Peer));
+         Ada.Text_IO.Put_Line
+           (Ada.Exceptions.Exception_Information (E));
+         Self.Close_Connection;
+         return;
+   end Do_Handshake;
+
    -------------------
    -- Get_Handshake --
    -------------------
 
    function Get_Handshake (Self : Connection'Class) return Handshake_Image is
-      function "+" is new Ada.Unchecked_Conversion
-        (Handshake_Type, Handshake_Image);
-
       Result : Handshake_Type;
 
    begin
@@ -256,6 +288,16 @@ package body Torrent.Connections is
       return Meta.Piece_SHA1 (Piece) = Value;
    end Is_Valid_Piece;
 
+   ----------
+   -- Peer --
+   ----------
+
+   function Peer
+     (Self : Connection'Class) return GNAT.Sockets.Sock_Addr_Type is
+   begin
+      return Self.Peer;
+   end Peer;
+
    -------------------
    -- Send_Bitfield --
    -------------------
@@ -303,6 +345,10 @@ package body Torrent.Connections is
    is
       Last : Ada.Streams.Stream_Element_Offset;
    begin
+      if Self.Closed then
+         return;
+      end if;
+
       GNAT.Sockets.Send_Socket
         (Socket => Self.Socket,
          Item   => Data,
@@ -366,7 +412,7 @@ package body Torrent.Connections is
    -----------------
 
    procedure Send_Pieces (Self : in out Connection'Class) is
-   begin
+   begin  --  FIXME check if unchoked
       while not Self.Requests.Is_Empty loop
          declare
             Last : Ada.Streams.Stream_Element_Count;
@@ -387,6 +433,10 @@ package body Torrent.Connections is
               To_Int (Positive (Item.Piece) - 1);
             Data (Data'First + 5 .. Data'First + 9) :=
               To_Int (Natural (Item.Span.From));
+
+            if Self.Closed then
+               return;
+            end if;
 
             GNAT.Sockets.Send_Socket
               (Socket => Self.Socket,
@@ -472,14 +522,14 @@ package body Torrent.Connections is
       --------------------------------
 
       procedure Connect_And_Send_Handshake is
-         Last   : Ada.Streams.Stream_Element_Count;
+         Socket : GNAT.Sockets.Socket_Type;
          Status : GNAT.Sockets.Selector_Status;
       begin
          Ada.Text_IO.Put_Line ("Connecting " & GNAT.Sockets.Image (Self.Peer));
-         GNAT.Sockets.Create_Socket (Self.Socket);
+         GNAT.Sockets.Create_Socket (Socket);
 
          GNAT.Sockets.Connect_Socket
-           (Socket => Self.Socket,
+           (Socket => Socket,
             Server => Self.Peer,
             Timeout => 2.0,
             Status => Status);
@@ -490,32 +540,7 @@ package body Torrent.Connections is
             return;
          end if;
 
-         GNAT.Sockets.Create_Selector (Self.Selector);
-
-         Ada.Text_IO.Put_Line
-           ("Connected to: " & GNAT.Sockets.Image (Self.Peer));
-
-         GNAT.Sockets.Send_Socket
-           (Socket => Self.Socket,
-            Item   => Self.Get_Handshake,
-            Last   => Last);
-
-         pragma Assert (Last = Handshake_Image'Last);
-
-         GNAT.Sockets.Set_Socket_Option
-           (Socket => Self.Socket,
-            Level  => GNAT.Sockets.Socket_Level,
-            Option => (GNAT.Sockets.Receive_Timeout, 1.0));
-
-         GNAT.Sockets.Set_Socket_Option
-           (Socket => Self.Socket,
-            Level  => GNAT.Sockets.Socket_Level,
-            Option => (GNAT.Sockets.Send_Timeout, 0.0));
-
-         Self.Sent_Handshake := True;
-
-         Self.Send_Bitfield (Completed);
-         Self.Last_Completed := Completed'Last;
+         Self.Do_Handshake (Socket, Completed);
       end Connect_And_Send_Handshake;
 
       -------------------
@@ -899,7 +924,7 @@ package body Torrent.Connections is
       if Self.Closed then
          return;
 
-      elsif not Self.Sent_Handshake then
+      elsif not Self.Sent_Handshake then  --  FIXME Drop this
          Connect_And_Send_Handshake;
 
          if Self.Closed then
@@ -931,6 +956,10 @@ package body Torrent.Connections is
             Read : Ada.Streams.Stream_Element_Count;
          begin
 
+            if Self.Closed then
+               return;
+            end if;
+
             GNAT.Sockets.Receive_Socket
               (Socket => Self.Socket,
                Item   => Data (Last + 1 .. Data'Last),
@@ -942,8 +971,6 @@ package body Torrent.Connections is
                Self.Close_Connection;
                return;
             else
-               Ada.Text_IO.Put ("Read:" & GNAT.Sockets.Image (Self.Peer));
-               Ada.Text_IO.Put_Line (Piece_Offset'Image (Read - Last));
                Last := Read;
             end if;
 
@@ -953,8 +980,7 @@ package body Torrent.Connections is
                if GNAT.Sockets.Resolve_Exception (E) in
                  GNAT.Sockets.Resource_Temporarily_Unavailable
                then
-                  Ada.Text_IO.Put_Line
-                    ("Timeout on Read:" & GNAT.Sockets.Image (Self.Peer));
+                  null;  --  Timeout on Read
                else
                   Ada.Text_IO.Put_Line
                     ("Raised on Read:" & GNAT.Sockets.Image (Self.Peer));
