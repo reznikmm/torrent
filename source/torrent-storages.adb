@@ -67,6 +67,7 @@ package body Torrent.Storages is
       is
          use type League.Strings.Universal_String;
 
+         Name : League.Strings.Universal_String;
          From : Ada.Streams.Stream_Element_Count := Data'First;
          Last : Ada.Streams.Stream_Element_Count;
 
@@ -82,15 +83,14 @@ package body Torrent.Storages is
          File_Length : Ada.Streams.Stream_Element_Count :=
            Meta.File_Length (File);
 
-         Name  : constant League.Strings.Universal_String :=
-           Root_Path & "/" & Meta.File_Path (File).Join ('/');
-
       begin
          if Skip >= File_Length then
             return;  --  Offset is greater then torrent size.
          end if;
 
          loop
+            Name := Root_Path & "/" & Meta.File_Path (File).Join ('/');
+
             if Skip + Data'Last - From + 1 > File_Length then
                Last := From + File_Length - Skip - 1;
             else
@@ -117,7 +117,7 @@ package body Torrent.Storages is
                Done : Ada.Streams.Stream_Element_Offset;
             begin
                if Ada.Streams.Stream_IO.Size (Read_Cache.Input) >=
-                 Ada.Streams.Stream_IO.Count (Skip + Data'Length)
+                 Ada.Streams.Stream_IO.Count (Skip + Last - From + 1)
                then
                   Ada.Streams.Stream_IO.Read
                     (File => Read_Cache.Input,
