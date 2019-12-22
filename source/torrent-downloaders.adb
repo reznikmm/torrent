@@ -7,6 +7,8 @@
 with Ada.Calendar.Formatting;
 with Ada.Containers.Hashed_Sets;
 with Ada.Containers.Ordered_Sets;
+with Ada.Containers.Synchronized_Queue_Interfaces;
+with Ada.Containers.Unbounded_Synchronized_Queues;
 with Ada.Exceptions;
 with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
@@ -28,6 +30,14 @@ with Torrent.Handshakes;
 package body Torrent.Downloaders is
 
    use type Ada.Streams.Stream_Element_Offset;
+
+   package Connection_Queue_Interfaces is new
+     Ada.Containers.Synchronized_Queue_Interfaces
+       (Torrent.Connections.Connection_Access);
+
+   package Connection_Queues is new
+     Ada.Containers.Unbounded_Synchronized_Queues
+       (Connection_Queue_Interfaces);
 
    type Connection_Access_Array is
      array (Positive range <>) of Torrent.Connections.Connection_Access;
@@ -74,6 +84,10 @@ package body Torrent.Downloaders is
          Value      : not null Torrent.Connections.Connection_Access);
       entry Stop;
    end Initiator;
+
+   Recycle : Connection_Queues.Queue;
+   --  Connections, returned by Manager back to Initiator to recconnect or
+   --  destroy.
 
    Port : constant := 33411;
 
@@ -144,6 +158,7 @@ package body Torrent.Downloaders is
 
       type Accepted_Connection is record
          Socket  : GNAT.Sockets.Socket_Type;
+         Address : GNAT.Sockets.Sock_Addr_Type;
          Data    : Torrent.Handshakes.Handshake_Image;
          Last    : Ada.Streams.Stream_Element_Count;
          Done    : Boolean;
@@ -206,7 +221,12 @@ package body Torrent.Downloaders is
             Level  => GNAT.Sockets.Socket_Level,
             Option => (GNAT.Sockets.Receive_Timeout, 0.0));
 
-         Accepted.Append ((Socket, Last => 0, Done => False, others => <>));
+         Accepted.Append
+           ((Socket,
+            Last    => 0,
+            Done    => False,
+            Address => Address,
+            others  => <>));
       end Accept_Connection;
 
       ----------
@@ -264,6 +284,16 @@ package body Torrent.Downloaders is
                     (Job.Meta,
                      Job.Storage'Unchecked_Access,
                      Job.Meta.Piece_Count);
+
+                  Item.Session.Initialize
+                    (My_Id    => Job.Peer_Id,
+                     Peer     => Item.Address,
+                     Listener => Job.Tracked'Unchecked_Access);
+
+                  Item.Session.Do_Handshake
+                    (Item.Socket,
+                     Job.Completed (1 .. Job.Last_Completed),
+                     Inbound => True);
                end if;
             end;
          else
@@ -292,6 +322,7 @@ package body Torrent.Downloaders is
       Time     : Ada.Calendar.Time := Ada.Calendar.Clock + 20.0;
       W_Set    : GNAT.Sockets.Socket_Set_Type;
       R_Set    : GNAT.Sockets.Socket_Set_Type;
+      Session  : Torrent.Connections.Connection_Access;
    begin
       GNAT.Sockets.Create_Selector (Selector);
       GNAT.Sockets.Create_Socket (Server);
@@ -299,26 +330,35 @@ package body Torrent.Downloaders is
       GNAT.Sockets.Listen_Socket (Server);
 
       loop
+         loop
+            select
+               Recycle.Dequeue (Session);
+
+               if Inbound.Contains (Session) then
+                  Inbound.Delete (Session);
+                  Free (Session);
+               else
+                  Time := Ada.Calendar.Clock;
+                  Plan.Insert
+                    ((Time + 300.0,
+                     Session,
+                     Find_Download (Session.Meta.Info_Hash)));
+               end if;
+            else
+               exit;
+            end select;
+         end loop;
+
          select
             accept Stop;
             exit;
-
          or
             accept Connect
               (Downloader : not null Downloader_Access;
                Value      : not null Torrent.Connections.Connection_Access)
             do
-               if Inbound.Contains (Value) then
-                  declare
-                     Session : Torrent.Connections.Connection_Access := Value;
-                  begin
-                     Free (Session);
-                     Inbound.Delete (Value);
-                  end;
-               else
-                  Time := Ada.Calendar.Clock;
-                  Plan.Insert ((Time, Value, Downloader));
-               end if;
+               Time := Ada.Calendar.Clock;
+               Plan.Insert ((Time, Value, Downloader));
             end Connect;
          or
             delay until Time;
@@ -413,7 +453,8 @@ package body Torrent.Downloaders is
                            Work (J).Item.Do_Handshake
                              (Work (J).Socket,
                               Work (J).Job.Completed
-                                (1 .. Work (J).Job.Last_Completed));
+                              (1 .. Work (J).Job.Last_Completed),
+                              Inbound => False);
 
                            if Work (J).Item.Connected then
                               Manager.Connected (Work (J).Item);
@@ -431,7 +472,7 @@ package body Torrent.Downloaders is
                   end;
                end if;
 
-               Time := Ada.Calendar.Clock + 5.0;
+               Time := Ada.Calendar.Clock + 1.0;
             end;
          end if;
       end loop;
@@ -456,7 +497,7 @@ package body Torrent.Downloaders is
          Job := Value;
       end New_Download;
 
-      while Job.Left > 0 loop
+      loop
          select
             accept Connected
               (Value : in not null Torrent.Connections.Connection_Access)
@@ -464,6 +505,9 @@ package body Torrent.Downloaders is
                Job.Chocked.Append (Value);
                Slowdown := 0.0;
             end Connected;
+         or
+            accept Complete;
+            exit;
          else
             delay Slowdown;
          end select;
@@ -480,13 +524,24 @@ package body Torrent.Downloaders is
             end loop;
 
             --  process chocked connections.
-            for J of Job.Chocked loop
-               if not J.Connected then
-                  Initiator.Connect (Job, J);
-               elsif not (for some X of List => X = J) then
-                  J.Serve (Job.Completed (1 .. Job.Last_Completed), 0.1);
-               end if;
-            end loop;
+            declare
+               J : Positive := 1;
+               Conn : Torrent.Connections.Connection_Access;
+            begin
+               while J <= Job.Chocked.Last_Index loop
+                  Conn := Job.Chocked (J);
+
+                  if not Conn.Connected then
+                     Recycle.Enqueue (Conn);
+                     Job.Chocked.Delete (J);
+                  elsif not (for some X of List => X = Conn) then
+                     Conn.Serve (Job.Completed (1 .. Job.Last_Completed), 1.0);
+                     J := J + 1;
+                  else
+                     J := J + 1;
+                  end if;
+               end loop;
+            end;
 
             for J in List'Range loop
                if List (J) /= null then
@@ -495,8 +550,6 @@ package body Torrent.Downloaders is
             end loop;
          end;
       end loop;
-
-      accept Complete;
 
       for J in Sessions'Range loop
          Sessions (J).Stop;
@@ -532,9 +585,7 @@ package body Torrent.Downloaders is
 
          end select;
 
-         if Conn not in null
-           and then Conn.Intrested
-         then
+         if Conn.Intrested then
             Conn.Set_Choked (False);
             Conn.Serve (Job.Completed (1 .. Job.Last_Completed), Seed_Time);
             Conn.Set_Choked (True);
@@ -551,7 +602,6 @@ package body Torrent.Downloaders is
    procedure Check_Stored_Pieces (Self : in out Downloader'Class) is
    begin
       for J in 1 .. Self.Piece_Count loop
-         Ada.Text_IO.Put_Line (J'Img);
          if Connections.Is_Valid_Piece (Self.Meta, Self.Storage, J) then
             Self.Tracked.Piece_Completed (J, True);
          end if;
@@ -567,6 +617,7 @@ package body Torrent.Downloaders is
       Path : League.String_Vectors.Universal_String_Vector)
    is
       procedure Set_Peer_Id (Value : out SHA1);
+      procedure Download;
 
       -----------------
       -- Set_Peer_Id --
@@ -587,7 +638,88 @@ package body Torrent.Downloaders is
          Value := (1 .. Value'Last => 33);
       end Set_Peer_Id;
 
-      URL : League.IRIs.IRI;
+      --------------
+      -- Download --
+      --------------
+
+      procedure Download is
+         URL : League.IRIs.IRI := Trackers.Event_URL
+           (Tracker    => Self.Meta.Announce,
+            Info_Hash  => Self.Meta.Info_Hash,
+            Peer_Id    => Self.Peer_Id,
+            Port       => Self.Port,
+            Uploaded   => Self.Uploaded,
+            Downloaded => Self.Downloaded,
+            Left       => Self.Left,
+            Event      => Trackers.Started);
+
+         Reply : constant AWS.Response.Data :=
+           AWS.Client.Get
+             (URL.To_Universal_String.To_UTF_8_String,
+              Follow_Redirection => True);
+      begin
+         if AWS.Response.Status_Code (Reply) not in AWS.Messages.Success then
+            Ada.Text_IO.Put_Line
+              ("Tracker request failed:"
+               & AWS.Messages.Status_Code'Image
+                 (AWS.Response.Status_Code (Reply)));
+            Ada.Text_IO.Put_Line (URL.To_Universal_String.To_UTF_8_String);
+            return;
+         end if;
+
+         Self.Tracker_Response := new Torrent.Trackers.Response'
+           (Trackers.Parse (AWS.Response.Message_Body (Reply)));
+
+         Ada.Text_IO.Put_Line
+           ("Peer_Count:" & (Self.Tracker_Response.Peer_Count'Img));
+
+         for J in 1 .. Self.Tracker_Response.Peer_Count loop
+            declare
+               TR : Torrent.Trackers.Response
+                 renames Self.Tracker_Response.all;
+
+               Connection : constant Torrent.Connections.Connection_Access :=
+                 new Torrent.Connections.Connection
+                   (Self.Meta,
+                    Self.Storage'Unchecked_Access,
+                    Self.Meta.Piece_Count);
+
+               Address    : constant GNAT.Sockets.Sock_Addr_Type :=
+                 (Family => GNAT.Sockets.Family_Inet,
+                  Addr   => GNAT.Sockets.Inet_Addr
+                    (TR.Peer_Address (J).To_UTF_8_String),
+                  Port   => GNAT.Sockets.Port_Type (TR.Peer_Port (J)));
+
+            begin
+               Connection.Initialize
+                 (Self.Peer_Id,
+                  Address,
+                  Self.Tracked'Unchecked_Access);
+
+               Initiator.Connect (Self'Unchecked_Access, Connection);
+            end;
+         end loop;
+
+         URL := Trackers.Event_URL
+           (Tracker    => Self.Meta.Announce,
+            Info_Hash  => Self.Meta.Info_Hash,
+            Peer_Id    => Self.Peer_Id,
+            Port       => Self.Port,
+            Uploaded   => Self.Uploaded,
+            Downloaded => Self.Downloaded,
+            Left       => Self.Left,
+            Event      => Trackers.Completed);
+
+         declare
+            Ignore : constant AWS.Response.Data :=
+              AWS.Client.Get
+                (URL.To_Universal_String.To_UTF_8_String,
+                 Follow_Redirection => True);
+         begin
+            null;  --  Just notify tracker
+         end;
+      end Download;
+
    begin
       Downloader_List.Insert (Self.Meta.Info_Hash, Self'Unchecked_Access);
 
@@ -609,85 +741,33 @@ package body Torrent.Downloaders is
       end loop;
 
       Self.Check_Stored_Pieces;
-
-      URL := Trackers.Event_URL
-        (Tracker    => Self.Meta.Announce,
-         Info_Hash  => Self.Meta.Info_Hash,
-         Peer_Id    => Self.Peer_Id,
-         Port       => Self.Port,
-         Uploaded   => Self.Uploaded,
-         Downloaded => Self.Downloaded,
-         Left       => Self.Left,
-         Event      => Trackers.Started);
-
-      declare
-         Reply : constant AWS.Response.Data :=
-           AWS.Client.Get
-             (URL.To_Universal_String.To_UTF_8_String,
-              Follow_Redirection => True);
-      begin
-         if AWS.Response.Status_Code (Reply) not in AWS.Messages.Success then
-            Ada.Text_IO.Put_Line
-              ("Tracker request failed:"
-               & AWS.Messages.Status_Code'Image
-                 (AWS.Response.Status_Code (Reply)));
-            Ada.Text_IO.Put_Line (URL.To_Universal_String.To_UTF_8_String);
-            return;
-         end if;
-
-         Self.Tracker_Response := new Torrent.Trackers.Response'
-           (Trackers.Parse (AWS.Response.Message_Body (Reply)));
-      end;
-
-      Ada.Text_IO.Put_Line
-        ("Peer_Count:" & (Self.Tracker_Response.Peer_Count'Img));
+      Ada.Text_IO.Put_Line ("Left bytes:" & (Self.Left'Img));
 
       Manager.New_Download (Self'Unchecked_Access);
 
-      for J in 1 .. Self.Tracker_Response.Peer_Count loop
+      if Self.Left > 0  then
+         Download;
+      else
          declare
-            TR : Torrent.Trackers.Response renames Self.Tracker_Response.all;
+            URL : constant League.IRIs.IRI := Trackers.Event_URL
+              (Tracker    => Self.Meta.Announce,
+               Info_Hash  => Self.Meta.Info_Hash,
+               Peer_Id    => Self.Peer_Id,
+               Port       => Self.Port,
+               Uploaded   => Self.Uploaded,
+               Downloaded => Self.Downloaded,
+               Left       => Self.Left,
+               Event      => Trackers.Regular);
 
-            Connection : constant Torrent.Connections.Connection_Access :=
-              new Torrent.Connections.Connection
-                (Self.Meta,
-                 Self.Storage'Unchecked_Access,
-                 Self.Meta.Piece_Count);
-
-            Address    : constant GNAT.Sockets.Sock_Addr_Type :=
-              (Family => GNAT.Sockets.Family_Inet,
-               Addr   => GNAT.Sockets.Inet_Addr
-                 (TR.Peer_Address (J).To_UTF_8_String),
-               Port   => GNAT.Sockets.Port_Type (TR.Peer_Port (J)));
-
+            Ignore : constant AWS.Response.Data :=
+              AWS.Client.Get
+                (URL.To_Universal_String.To_UTF_8_String,
+                 Follow_Redirection => True);
          begin
-            Connection.Initialize
-              (Self.Peer_Id,
-               Address,
-               Self.Tracked'Unchecked_Access);
-
-            Initiator.Connect (Self'Unchecked_Access, Connection);
+            null;  --  Just notify tracker
          end;
-      end loop;
-
-      URL := Trackers.Event_URL
-        (Tracker    => Self.Meta.Announce,
-         Info_Hash  => Self.Meta.Info_Hash,
-         Peer_Id    => Self.Peer_Id,
-         Port       => Self.Port,
-         Uploaded   => Self.Uploaded,
-         Downloaded => Self.Downloaded,
-         Left       => Self.Left,
-         Event      => Trackers.Completed);
-
-      declare
-         Ignore : constant AWS.Response.Data :=
-           AWS.Client.Get
-             (URL.To_Universal_String.To_UTF_8_String,
-              Follow_Redirection => True);
-      begin
-         null;  --  Just notify tracker
-      end;
+         delay 3600.0;  --  Seed file for some time
+      end if;
 
       Manager.Complete;
       Initiator.Stop;
@@ -767,9 +847,6 @@ package body Torrent.Downloaders is
         (Piece : Piece_Index;
          Ok    : Boolean) is
       begin
-         Ada.Text_IO.Put_Line
-           ("Piece_Completed" & (Piece'Img) & " " & (Ok'Img));
-
          Our_Map (Piece) := Ok;
 
          if Finished.Contains (Piece) then

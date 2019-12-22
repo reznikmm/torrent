@@ -82,7 +82,8 @@ package body Torrent.Connections is
    procedure Do_Handshake
      (Self      : in out Connection'Class;
       Socket    : GNAT.Sockets.Socket_Type;
-      Completed : Piece_Index_Array)
+      Completed : Piece_Index_Array;
+      Inbound   : Boolean)
    is
       Last   : Ada.Streams.Stream_Element_Count;
    begin
@@ -109,6 +110,7 @@ package body Torrent.Connections is
 
       Self.Initialize (Self.My_Peer_Id, Self.Peer, Self.Listener);
       Self.Sent_Handshake := True;
+      Self.Got_Handshake := Inbound;
 
       Self.Send_Bitfield (Completed);
       Self.Last_Completed := Completed'Last;
@@ -418,7 +420,7 @@ package body Torrent.Connections is
             Last : Ada.Streams.Stream_Element_Count;
             Item : constant Piece_Interval := Self.Requests.Last_Element;
             Data : Ada.Streams.Stream_Element_Array
-              (Item.Span.From - 1 - 4 - 4 .. Item.Span.To);
+              (Item.Span.From - 4 - 1 - 4 - 4 .. Item.Span.To);
          begin
             Self.Storage.Start_Reading;
             Self.Storage.Read
@@ -428,10 +430,12 @@ package body Torrent.Connections is
                Data   => Data (Item.Span.From .. Item.Span.To));
             Self.Storage.Stop_Reading;
 
-            Data (Data'First) := 7;  --  piece
-            Data (Data'First + 1 .. Data'First + 4) :=
+            Data (Data'First .. Data'First + 3) :=  --  Message length
+              To_Int (Data'Length - 4);
+            Data (Data'First + 4) := 7;  --  piece
+            Data (Data'First + 5 .. Data'First + 8) :=
               To_Int (Positive (Item.Piece) - 1);
-            Data (Data'First + 5 .. Data'First + 9) :=
+            Data (Data'First + 9 .. Data'First + 12) :=
               To_Int (Natural (Item.Span.From));
 
             if Self.Closed then
@@ -482,7 +486,6 @@ package body Torrent.Connections is
    is
       use type Ada.Calendar.Time;
 
-      procedure Connect_And_Send_Handshake;
       procedure Check_Intrested;
       procedure Send_Initial_Requests;
       function Get_Handshake
@@ -516,32 +519,6 @@ package body Torrent.Connections is
             Self.We_Intrested := True;
          end if;
       end Check_Intrested;
-
-      --------------------------------
-      -- Connect_And_Send_Handshake --
-      --------------------------------
-
-      procedure Connect_And_Send_Handshake is
-         Socket : GNAT.Sockets.Socket_Type;
-         Status : GNAT.Sockets.Selector_Status;
-      begin
-         Ada.Text_IO.Put_Line ("Connecting " & GNAT.Sockets.Image (Self.Peer));
-         GNAT.Sockets.Create_Socket (Socket);
-
-         GNAT.Sockets.Connect_Socket
-           (Socket => Socket,
-            Server => Self.Peer,
-            Timeout => 2.0,
-            Status => Status);
-
-         if Status not in GNAT.Sockets.Completed then
-            Ada.Text_IO.Put_Line ("Failed: " & GNAT.Sockets.Image (Self.Peer));
-            Self.Closed := True;
-            return;
-         end if;
-
-         Self.Do_Handshake (Socket, Completed);
-      end Connect_And_Send_Handshake;
 
       -------------------
       -- Get_Handshake --
@@ -795,9 +772,12 @@ package body Torrent.Connections is
 
          if Last then
             if Self.Is_Valid_Piece (Index) then
+               Ada.Text_IO.Put_Line ("Piece completed" & (Index'Img));
+
                Self.Listener.Piece_Completed (Index, True);
                Self.Send_Have (Index);
             else
+               Ada.Text_IO.Put_Line ("Piece FAILED!" & (Index'Img));
                Self.Listener.Piece_Completed (Index, False);
             end if;
          end if;
@@ -923,13 +903,6 @@ package body Torrent.Connections is
    begin
       if Self.Closed then
          return;
-
-      elsif not Self.Sent_Handshake then  --  FIXME Drop this
-         Connect_And_Send_Handshake;
-
-         if Self.Closed then
-            return;
-         end if;
       end if;
 
       if not Self.Choked_Sent then
@@ -937,6 +910,7 @@ package body Torrent.Connections is
 
          if Self.He_Choked then
             Self.Send_Message ((00, 00, 00, 01, 00));  --  choke
+            Self.Requests.Clear;
          else
             Self.Send_Message ((00, 00, 00, 01, 01));  --  unchoke
          end if;
@@ -951,7 +925,7 @@ package body Torrent.Connections is
       Data (1 .. Last) := Self.Unparsed.To_Stream_Element_Array;
       Self.Unparsed.Clear;
 
-      loop
+      while Limit >= Ada.Calendar.Clock loop
          declare
             Read : Ada.Streams.Stream_Element_Count;
          begin
@@ -1005,7 +979,7 @@ package body Torrent.Connections is
 
          end if;
 
-         exit when Limit < Ada.Calendar.Clock;
+         Self.Send_Pieces;
       end loop;
 
       if Last > 0 then
@@ -1013,7 +987,6 @@ package body Torrent.Connections is
          Self.Unparsed.Append (Data (1 .. Last));
       end if;
 
-      Self.Send_Pieces;
    exception
       when E : others =>
          Ada.Text_IO.Put_Line
@@ -1032,8 +1005,7 @@ package body Torrent.Connections is
    begin
       if Self.He_Choked /= Value then
          Self.He_Choked := Value;
-         Self.Choked_Sent := False;
-         Self.Requests.Clear;
+         Self.Choked_Sent := not Self.Choked_Sent;
       end if;
    end Set_Choked;
 

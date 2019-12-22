@@ -95,7 +95,8 @@ package Torrent.Connections is
    procedure Do_Handshake
      (Self      : in out Connection'Class;
       Socket    : GNAT.Sockets.Socket_Type;
-      Completed : Piece_Index_Array);
+      Completed : Piece_Index_Array;
+      Inbound   : Boolean);
 
    function Peer (Self : Connection'Class) return GNAT.Sockets.Sock_Addr_Type;
    function Connected (Self : Connection'Class) return Boolean;
