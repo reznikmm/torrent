@@ -5,8 +5,12 @@
 -------------------------------------------------------------
 
 with Ada.Containers.Ordered_Maps;
+with Ada.Containers.Synchronized_Queue_Interfaces;
+with Ada.Containers.Unbounded_Synchronized_Queues;
 with Ada.Containers.Vectors;
 with Ada.Finalization;
+
+with GNAT.Sockets;
 
 with League.String_Vectors;
 
@@ -25,9 +29,41 @@ package Torrent.Downloaders is
    --  The downloader tracks one torrent file and all connections
    --  related to it.
 
+   type Downloader_Access is access all Downloader'Class
+     with Storage_Size => 0;
+
    procedure Start
      (Self : aliased in out Downloader'Class;
       Path : League.String_Vectors.Universal_String_Vector);
+
+   function Completed (Self : Downloader'Class)
+     return Torrent.Connections.Piece_Index_Array
+       with Inline;
+
+   function Create_Session
+     (Self    : in out Downloader'Class;
+      Address : GNAT.Sockets.Sock_Addr_Type)
+      return Torrent.Connections.Connection_Access;
+
+   --  For interlnal usage
+
+   package Connection_Queue_Interfaces is new
+     Ada.Containers.Synchronized_Queue_Interfaces
+       (Torrent.Connections.Connection_Access);
+
+   package Connection_Queues is new
+     Ada.Containers.Unbounded_Synchronized_Queues
+       (Connection_Queue_Interfaces);
+
+   Recycle : Connection_Queues.Queue;
+   --  Connections, returned by Manager back to Initiator to recconnect or
+   --  destroy.
+
+   procedure Connected (Self : Torrent.Connections.Connection_Access);
+
+   function Find_Download (Hash : SHA1) return Downloader_Access;
+
+   Port : constant := 33411;
 
 private
 
