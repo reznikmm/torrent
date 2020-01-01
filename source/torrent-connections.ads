@@ -1,4 +1,4 @@
---  Copyright (c) 2019 Maxim Reznik <reznikmm@gmail.com>
+--  Copyright (c) 2019-2020 Maxim Reznik <reznikmm@gmail.com>
 --
 --  SPDX-License-Identifier: MIT
 --  License-Filename: LICENSE
@@ -6,6 +6,8 @@
 
 with Ada.Containers.Vectors;
 with Ada.Finalization;
+with Ada.Containers.Synchronized_Queue_Interfaces;
+with Ada.Containers.Unbounded_Synchronized_Queues;
 
 with GNAT.Sockets;
 
@@ -13,11 +15,18 @@ with League.Stream_Element_Vectors;
 
 with Torrent.Metainfo_Files;
 with Torrent.Storages;
+limited with Torrent.Downloaders;
 
 package Torrent.Connections is
 
    type Connection is tagged;
    type Connection_Access is access all Connection'Class;
+
+   package Queue_Interfaces is new
+     Ada.Containers.Synchronized_Queue_Interfaces (Connection_Access);
+
+   package Queues is new
+     Ada.Containers.Unbounded_Synchronized_Queues (Queue_Interfaces);
 
    type Interval is record
       From : Piece_Offset;  --  Starts from zero
@@ -81,6 +90,7 @@ package Torrent.Connections is
 
    type Connection
      (Meta        : not null Torrent.Metainfo_Files.Metainfo_File_Access;
+      Downloader  : not null access Torrent.Downloaders.Downloader'Class;
       Storage     : not null Torrent.Storages.Storage_Access;
       Piece_Count : Piece_Index) is tagged limited private;
 
@@ -133,6 +143,7 @@ private
 
    type Connection
      (Meta        : not null Torrent.Metainfo_Files.Metainfo_File_Access;
+      Downloader  : not null access Torrent.Downloaders.Downloader'Class;
       Storage     : not null Torrent.Storages.Storage_Access;
       Piece_Count : Piece_Index) is limited
      new Ada.Finalization.Limited_Controlled with

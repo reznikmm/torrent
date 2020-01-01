@@ -1,3 +1,9 @@
+--  Copyright (c) 2020 Maxim Reznik <reznikmm@gmail.com>
+--
+--  SPDX-License-Identifier: MIT
+--  License-Filename: LICENSE
+-------------------------------------------------------------
+
 with Ada.Calendar;
 with Ada.Containers.Hashed_Sets;
 with Ada.Containers.Ordered_Sets;
@@ -9,8 +15,7 @@ with Ada.Unchecked_Deallocation;
 with System.Address_To_Access_Conversions;
 with System.Storage_Elements;
 
-with GNAT.Sockets;
-
+with Torrent.Contexts;
 with Torrent.Handshakes;
 
 package body Torrent.Initiators is
@@ -28,7 +33,7 @@ package body Torrent.Initiators is
 
       type Socket_Connection is record
          Socket : GNAT.Sockets.Socket_Type;
-         Item   : Torrent.Connections.Connection_Access;
+         Addr   : GNAT.Sockets.Sock_Addr_Type;
          Job    : Torrent.Downloaders.Downloader_Access;
       end record;
 
@@ -37,7 +42,7 @@ package body Torrent.Initiators is
 
       type Planned_Connection is record
          Time : Ada.Calendar.Time;
-         Item : Torrent.Connections.Connection_Access;
+         Addr : GNAT.Sockets.Sock_Addr_Type;
          Job  : Torrent.Downloaders.Downloader_Access;
       end record;
 
@@ -136,11 +141,12 @@ package body Torrent.Initiators is
 
       function Less (Left, Right : Planned_Connection) return Boolean is
          use type Ada.Calendar.Time;
-         use type System.Storage_Elements.Integer_Address;
+         function "+" (V : GNAT.Sockets.Sock_Addr_Type) return String
+           renames GNAT.Sockets.Image;
 
       begin
          return Left.Time < Right.Time
-           or else (Left.Time = Right.Time and +Left.Item < +Right.Item);
+           or else (Left.Time = Right.Time and +Left.Addr < +Right.Addr);
       end Less;
 
       --------------------
@@ -164,7 +170,7 @@ package body Torrent.Initiators is
             declare
                Value : constant Handshake_Type := -Item.Data;
             begin
-               Job := Torrent.Downloaders.Find_Download (Value.Info_Hash);
+               Job := Context.Find_Download (Value.Info_Hash);
                Item.Done := True;
 
                if Value.Length = Header'Length
@@ -213,7 +219,7 @@ package body Torrent.Initiators is
       loop
          loop
             select
-               Torrent.Downloaders.Recycle.Dequeue (Session);
+               Recycle.Dequeue (Session);
 
                if Inbound.Contains (Session) then
                   Inbound.Delete (Session);
@@ -222,9 +228,9 @@ package body Torrent.Initiators is
                   Time := Ada.Calendar.Clock;
                   Plan.Insert
                     ((Time + 300.0,
-                     Session,
-                     Torrent.Downloaders.Find_Download
-                       (Session.Meta.Info_Hash)));
+                     Session.Peer,
+                     Torrent.Downloaders.Downloader_Access
+                       (Session.Downloader)));
                end if;
             else
                exit;
@@ -237,10 +243,10 @@ package body Torrent.Initiators is
          or
             accept Connect
               (Downloader : not null Torrent.Downloaders.Downloader_Access;
-               Value      : not null Torrent.Connections.Connection_Access)
+               Address    : GNAT.Sockets.Sock_Addr_Type)
             do
                Time := Ada.Calendar.Clock;
-               Plan.Insert ((Time, Value, Downloader));
+               Plan.Insert ((Time, Address, Downloader));
             end Connect;
          or
             delay until Time;
@@ -255,15 +261,15 @@ package body Torrent.Initiators is
                exit when First.Time > Time;
 
                Ada.Text_IO.Put_Line
-                 ("Connecting: " & GNAT.Sockets.Image (First.Item.Peer));
+                 ("Connecting: " & GNAT.Sockets.Image (First.Addr));
 
                GNAT.Sockets.Create_Socket (Socket);
                GNAT.Sockets.Connect_Socket
                  (Socket   => Socket,
-                  Server   => First.Item.Peer,
+                  Server   => First.Addr,
                   Timeout  => 0.0,
                   Status   => Ignore);
-               Work.Append ((Socket, First.Item, First.Job));
+               Work.Append ((Socket, First.Addr, First.Job));
                Plan.Delete_First;
             end;
          end loop;
@@ -315,7 +321,7 @@ package body Torrent.Initiators is
                                    (Accepted (J).Socket);
                               else
                                  Inbound.Insert (Accepted (J).Session);
-                                 Torrent.Downloaders.Connected
+                                 Context.Connected
                                    (Accepted (J).Session);
                               end if;
 
@@ -333,20 +339,28 @@ package body Torrent.Initiators is
 
                      while J <= Work.Last_Index loop
                         if GNAT.Sockets.Is_Set (W_Set, Work (J).Socket) then
-                           Work (J).Item.Do_Handshake
-                             (Work (J).Socket,
-                              Work (J).Job.Completed,
-                              Inbound => False);
+                           declare
+                              Conn : Torrent.Connections.Connection_Access :=
+                                Work (J).Job.Create_Session (Work (J).Addr);
+                           begin
+                              Conn.Do_Handshake
+                                (Work (J).Socket,
+                                 Work (J).Job.Completed,
+                                 Inbound => False);
 
-                           if Work (J).Item.Connected then
-                              Torrent.Downloaders.Connected (Work (J).Item);
-                           else
-                              Plan.Insert
-                                ((Time + 300.0, Work (J).Item, Work (J).Job));
-                           end if;
+                              if Conn.Connected then
+                                 Context.Connected (Conn);
+                              else
+                                 Free (Conn);
+                                 Plan.Insert
+                                   ((Time + 300.0,
+                                    Work (J).Addr,
+                                    Work (J).Job));
+                              end if;
 
-                           Work.Swap (J, Work.Last_Index);
-                           Work.Delete_Last;
+                              Work.Swap (J, Work.Last_Index);
+                              Work.Delete_Last;
+                           end;
                         else
                            J := J + 1;
                         end if;

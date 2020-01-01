@@ -5,24 +5,24 @@
 -------------------------------------------------------------
 
 with Ada.Containers.Ordered_Maps;
-with Ada.Containers.Synchronized_Queue_Interfaces;
-with Ada.Containers.Unbounded_Synchronized_Queues;
 with Ada.Containers.Vectors;
 with Ada.Finalization;
 
 with GNAT.Sockets;
 
-with League.String_Vectors;
+with League.Strings;
 
 with Torrent.Connections;
 with Torrent.Metainfo_Files;
 with Torrent.Storages;
 with Torrent.Trackers;
+limited with Torrent.Contexts;
 
 package Torrent.Downloaders is
 
    type Downloader
-     (Meta        : not null Torrent.Metainfo_Files.Metainfo_File_Access;
+     (Context     : access Torrent.Contexts.Context'Class;
+      Meta        : not null Torrent.Metainfo_Files.Metainfo_File_Access;
       File_Count  : Ada.Containers.Count_Type;
       Piece_Count : Piece_Index) is
         tagged limited private;
@@ -32,9 +32,11 @@ package Torrent.Downloaders is
    type Downloader_Access is access all Downloader'Class
      with Storage_Size => 0;
 
-   procedure Start
-     (Self : aliased in out Downloader'Class;
-      Path : League.String_Vectors.Universal_String_Vector);
+   procedure Initialize
+     (Self : in out Downloader'Class;
+      Path : League.Strings.Universal_String);
+
+   procedure Start (Self : aliased in out Downloader'Class);
 
    function Completed (Self : Downloader'Class)
      return Torrent.Connections.Piece_Index_Array
@@ -44,26 +46,6 @@ package Torrent.Downloaders is
      (Self    : in out Downloader'Class;
       Address : GNAT.Sockets.Sock_Addr_Type)
       return Torrent.Connections.Connection_Access;
-
-   --  For interlnal usage
-
-   package Connection_Queue_Interfaces is new
-     Ada.Containers.Synchronized_Queue_Interfaces
-       (Torrent.Connections.Connection_Access);
-
-   package Connection_Queues is new
-     Ada.Containers.Unbounded_Synchronized_Queues
-       (Connection_Queue_Interfaces);
-
-   Recycle : Connection_Queues.Queue;
-   --  Connections, returned by Manager back to Initiator to recconnect or
-   --  destroy.
-
-   procedure Connected (Self : Torrent.Connections.Connection_Access);
-
-   function Find_Download (Hash : SHA1) return Downloader_Access;
-
-   Port : constant := 33411;
 
 private
 
@@ -118,12 +100,12 @@ private
    end Tracked_Pieces;
 
    type Downloader
-     (Meta        : not null Torrent.Metainfo_Files.Metainfo_File_Access;
+     (Context     : access Torrent.Contexts.Context'Class;
+      Meta        : not null Torrent.Metainfo_Files.Metainfo_File_Access;
       File_Count  : Ada.Containers.Count_Type;
       Piece_Count : Piece_Index) is
      new Ada.Finalization.Limited_Controlled with
       record
-         Path             : League.String_Vectors.Universal_String_Vector;
          Tracker_Response : Tracker_Response_Access;
          Tracked          : aliased Tracked_Pieces
            (Downloader'Unchecked_Access, Piece_Count);
@@ -132,7 +114,6 @@ private
          Uploaded         : Ada.Streams.Stream_Element_Count;
          Downloaded       : Ada.Streams.Stream_Element_Count;
          Left             : Ada.Streams.Stream_Element_Count;
-         Chocked          : Connection_Vectors.Vector;
          Completed        : Torrent.Connections.Piece_Index_Array
            (1 .. Piece_Count);
          Last_Completed   : Torrent.Piece_Count;

@@ -4,23 +4,18 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
-with GNAT.Sockets;
-
-with Torrent.Connections;
-with Torrent.Downloaders;
 limited with Torrent.Contexts;
+with Torrent.Connections;
 
-package Torrent.Initiators is
+package Torrent.Managers is
 
-   task type Initiator
+   task type Manager
      (Context : not null access Torrent.Contexts.Context;
       Recycle : not null access
         Torrent.Connections.Queue_Interfaces.Queue'Class)
    is
-      entry Connect
-        (Downloader : not null Torrent.Downloaders.Downloader_Access;
-         Address    : GNAT.Sockets.Sock_Addr_Type);
-      entry Stop;
-   end Initiator;
+      entry Connected (Value : not null Torrent.Connections.Connection_Access);
+      entry Complete;
+   end Manager;
 
-end Torrent.Initiators;
+end Torrent.Managers;
