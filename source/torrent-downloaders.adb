@@ -17,6 +17,7 @@ with AWS.Messages;
 with League.IRIs;
 
 with Torrent.Contexts;
+with Torrent.Logs;
 
 package body Torrent.Downloaders is
 
@@ -118,7 +119,10 @@ package body Torrent.Downloaders is
       end loop;
 
       Self.Check_Stored_Pieces;
-      Ada.Text_IO.Put_Line ("Left bytes:" & (Self.Left'Img));
+
+      pragma Debug
+        (Torrent.Logs.Enabled,
+         Torrent.Logs.Print ("Left bytes:" & (Self.Left'Img)));
    end Initialize;
 
    -----------
@@ -149,19 +153,27 @@ package body Torrent.Downloaders is
               Follow_Redirection => True);
       begin
          if AWS.Response.Status_Code (Reply) not in AWS.Messages.Success then
-            Ada.Text_IO.Put_Line
-              ("Tracker request failed:"
-               & AWS.Messages.Status_Code'Image
-                 (AWS.Response.Status_Code (Reply)));
-            Ada.Text_IO.Put_Line (URL.To_Universal_String.To_UTF_8_String);
+            pragma Debug
+              (Torrent.Logs.Enabled,
+               Torrent.Logs.Print
+                 ("Tracker request failed:"
+                  & AWS.Messages.Status_Code'Image
+                    (AWS.Response.Status_Code (Reply))));
+
+            pragma Debug
+              (Torrent.Logs.Enabled,
+               Torrent.Logs.Print (URL.To_Universal_String.To_UTF_8_String));
+
             return;
          end if;
 
          Self.Tracker_Response := new Torrent.Trackers.Response'
            (Trackers.Parse (AWS.Response.Message_Body (Reply)));
 
-         Ada.Text_IO.Put_Line
-           ("Peer_Count:" & (Self.Tracker_Response.Peer_Count'Img));
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              ("Peer_Count:" & (Self.Tracker_Response.Peer_Count'Img)));
 
          for J in 1 .. Self.Tracker_Response.Peer_Count loop
             declare

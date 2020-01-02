@@ -13,6 +13,7 @@ with Interfaces;
 
 with GNAT.SHA1;
 
+with Torrent.Logs;
 with Torrent.Handshakes; use Torrent.Handshakes;
 
 package body Torrent.Connections is
@@ -359,15 +360,19 @@ package body Torrent.Connections is
       pragma Assert (Last = Data'Last);
 
       if Data'Length <= 4 then
-         Ada.Text_IO.Put_Line
-           ("Send keepalive " & GNAT.Sockets.Image (Self.Peer));
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              ("Send keepalive " & GNAT.Sockets.Image (Self.Peer)));
       elsif Data (Data'First + 4) = 6 then
-         Ada.Text_IO.Put_Line
-           ("Send request "
-            & GNAT.Sockets.Image (Self.Peer)
-            & Integer'Image (Get_Int (Data, 5) + 1)
-            & Integer'Image (Get_Int (Data, 9))
-            & Integer'Image (Get_Int (Data, 13)));
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              ("Send request "
+               & GNAT.Sockets.Image (Self.Peer)
+               & Integer'Image (Get_Int (Data, 5) + 1)
+               & Integer'Image (Get_Int (Data, 9))
+               & Integer'Image (Get_Int (Data, 13))));
       else
          Ada.Text_IO.Put_Line
            ("Send "
@@ -402,10 +407,16 @@ package body Torrent.Connections is
             end;
          end if;
 
-         Ada.Text_IO.Put_Line
-           ("Send_Message:" & GNAT.Sockets.Image (Self.Peer));
-         Ada.Text_IO.Put_Line
-           (Ada.Exceptions.Exception_Information (E));
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              ("Send_Message:" & GNAT.Sockets.Image (Self.Peer)));
+
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              (Ada.Exceptions.Exception_Information (E)));
+
          Self.Close_Connection;
    end Send_Message;
 
@@ -451,11 +462,13 @@ package body Torrent.Connections is
 
             Total_Sent := Total_Sent + Data'Length;
 
-            Ada.Text_IO.Put_Line
-              ("Send piece "
-               & GNAT.Sockets.Image (Self.Peer)
-               & Piece_Count'Image (Item.Piece)
-               & Piece_Offset'Image (Item.Span.From));
+            pragma Debug
+              (Torrent.Logs.Enabled,
+               Torrent.Logs.Print
+                 ("Send piece "
+                  & GNAT.Sockets.Image (Self.Peer)
+                  & Piece_Count'Image (Item.Piece)
+                  & Piece_Offset'Image (Item.Span.From)));
 
             Self.Requests.Delete_Last;
             --   FIXME Increment send statistic.
@@ -474,10 +487,16 @@ package body Torrent.Connections is
             return;
          end if;
 
-         Ada.Text_IO.Put_Line
-           ("Send_Pieces:" & GNAT.Sockets.Image (Self.Peer));
-         Ada.Text_IO.Put_Line
-           (Ada.Exceptions.Exception_Information (E));
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              ("Send_Pieces:" & GNAT.Sockets.Image (Self.Peer)));
+
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              (Ada.Exceptions.Exception_Information (E)));
+
          Self.Close_Connection;
    end Send_Pieces;
 
@@ -580,22 +599,33 @@ package body Torrent.Connections is
 
          Index : Piece_Index;
       begin
-         Ada.Text_IO.Put ("MSG:" & GNAT.Sockets.Image (Self.Peer) & " ");
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              ("MSG:" & GNAT.Sockets.Image (Self.Peer) & " "));
 
          case Data (Data'First) is
             when 0 =>  --  choke
-               Ada.Text_IO.Put_Line ("choke");
+               pragma Debug
+                 (Torrent.Logs.Enabled, Torrent.Logs.Print ("choke"));
+
                Self.We_Choked := True;
                Self.Unreserve_Intervals;
             when 1 =>  -- unchoke
-               Ada.Text_IO.Put_Line ("unchoke");
+               pragma Debug
+                 (Torrent.Logs.Enabled, Torrent.Logs.Print ("unchoke"));
+
                Self.We_Choked := False;
                Send_Initial_Requests;
             when 2 =>  -- interested
-               Ada.Text_IO.Put_Line ("interested");
+               pragma Debug
+                 (Torrent.Logs.Enabled, Torrent.Logs.Print ("interested"));
+
                Self.He_Intrested := True;
             when 3 =>  -- not interested
-               Ada.Text_IO.Put_Line ("not interested");
+               pragma Debug
+                 (Torrent.Logs.Enabled, Torrent.Logs.Print ("not interested"));
+
                Self.He_Intrested := False;
             when 4 =>  -- have
 
@@ -604,17 +634,21 @@ package body Torrent.Connections is
                     Piece_Index (Get_Int (1) + 1);
                begin
                   if Index in Self.Piece_Map'Range then
-                     Ada.Text_IO.Put_Line ("have" & (Index'Img));
+                     pragma Debug
+                       (Torrent.Logs.Enabled,
+                        Torrent.Logs.Print ("have" & (Index'Img)));
 
                      Self.Piece_Map (Index) := True;
                      Check_Intrested;
                   end if;
                end;
             when 5 => -- bitfield
-               Index := 1;
-               Ada.Text_IO.Put_Line ("bitfield");
+               pragma Debug
+                 (Torrent.Logs.Enabled, Torrent.Logs.Print ("bitfield"));
 
-               Each_Byte :
+               Index := 1;
+
+                  Each_Byte :
                for X of Data (Data'First + 1 .. Data'Last) loop
                   declare
                      use type Interfaces.Unsigned_8;
@@ -642,8 +676,10 @@ package body Torrent.Connections is
                      Span   => (From => Piece_Offset (Get_Int (5)),
                                 To   => Piece_Offset (Get_Int (9))));
                begin
-                  Ada.Text_IO.Put_Line
-                    ("request" & (Next.Piece'Img) & (Next.Span.From'Img));
+                  pragma Debug
+                    (Torrent.Logs.Enabled,
+                     Torrent.Logs.Print
+                       ("request" & (Next.Piece'Img) & (Next.Span.From'Img)));
 
                   if Next.Span.To > Max_Interval_Size then
                      return;
@@ -664,7 +700,10 @@ package body Torrent.Connections is
                     Piece_Index (Get_Int (1) + 1);
                   Offset : constant Natural := Get_Int (5);
                begin
-                  Ada.Text_IO.Put_Line ("piece" & (Index'Img) & (Offset'Img));
+                  pragma Debug
+                    (Torrent.Logs.Enabled,
+                     Torrent.Logs.Print
+                       ("piece" & (Index'Img) & (Offset'Img)));
 
                   if Index in Self.Piece_Map'Range
                     and then Data'Length > 9
@@ -682,11 +721,14 @@ package body Torrent.Connections is
                                 To   => Piece_Offset (Get_Int (9))));
                   Cursor : Natural;
                begin
-                  Next.Span.To := Next.Span.From + Next.Span.To - 1;
-                  Ada.Text_IO.Put_Line
-                    ("cancel" & (Next.Piece'Img) & (Next.Span.From'Img));
+                  pragma Debug
+                    (Torrent.Logs.Enabled,
+                     Torrent.Logs.Print
+                       ("cancel" & (Next.Piece'Img) & (Next.Span.From'Img)));
 
-                  Cursor := Self.Requests.Find_Index (Next);
+                  Next.Span.To := Next.Span.From + Next.Span.To - 1;
+
+                     Cursor := Self.Requests.Find_Index (Next);
 
                   if Cursor /= 0 then
                      Self.Requests.Swap (Cursor, Self.Requests.Last_Index);
@@ -695,8 +737,9 @@ package body Torrent.Connections is
                end;
 
             when others =>
-               Ada.Text_IO.Put_Line
-                 ("unkown" & (Data (Data'First)'Img));
+               pragma Debug
+                 (Torrent.Logs.Enabled,
+                  Torrent.Logs.Print ("unkown" & (Data (Data'First)'Img)));
          end case;
       end On_Message;
 
@@ -778,12 +821,17 @@ package body Torrent.Connections is
 
          if Last then
             if Self.Is_Valid_Piece (Index) then
-               Ada.Text_IO.Put_Line ("Piece completed" & (Index'Img));
+               pragma Debug
+                 (Torrent.Logs.Enabled,
+                  Torrent.Logs.Print ("Piece completed" & (Index'Img)));
 
                Self.Listener.Piece_Completed (Index, True);
                Self.Send_Have (Index);
             else
-               Ada.Text_IO.Put_Line ("Piece FAILED!" & (Index'Img));
+               pragma Debug
+                 (Torrent.Logs.Enabled,
+                  Torrent.Logs.Print ("Piece FAILED!" & (Index'Img)));
+
                Self.Listener.Piece_Completed (Index, False);
             end if;
          end if;
@@ -946,8 +994,11 @@ package body Torrent.Connections is
                Last   => Read);
 
             if Read = Last then
-               Ada.Text_IO.Put_Line
-                 ("Closed on Read:" & GNAT.Sockets.Image (Self.Peer));
+               pragma Debug
+                 (Torrent.Logs.Enabled,
+                  Torrent.Logs.Print
+                    ("Closed on Read:" & GNAT.Sockets.Image (Self.Peer)));
+
                Self.Close_Connection;
                return;
             else

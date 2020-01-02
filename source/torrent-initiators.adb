@@ -17,6 +17,7 @@ with System.Storage_Elements;
 
 with Torrent.Contexts;
 with Torrent.Handshakes;
+with Torrent.Logs;
 
 package body Torrent.Initiators is
 
@@ -110,7 +111,9 @@ package body Torrent.Initiators is
          Socket  : GNAT.Sockets.Socket_Type;
       begin
          GNAT.Sockets.Accept_Socket (Server, Socket, Address);
-         Ada.Text_IO.Put_Line ("Accepted: " & GNAT.Sockets.Image (Address));
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print ("Accepted: " & GNAT.Sockets.Image (Address)));
 
          GNAT.Sockets.Set_Socket_Option
            (Socket => Socket,

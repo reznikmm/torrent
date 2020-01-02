@@ -15,6 +15,7 @@ with League.Strings;
 with Torrent.Contexts;
 with Torrent.Metainfo_Files;
 with Torrent.Connections;
+with Torrent.Logs;
 
 procedure Torrent.Run is
    function "+"
@@ -34,6 +35,7 @@ procedure Torrent.Run is
    Cmd : constant League.String_Vectors.Universal_String_Vector :=
      League.Application.Arguments;
 
+   Log_Option  : constant Wide_Wide_String := "--log=";
    Out_Option  : constant Wide_Wide_String := "--output=";
    Dir_Option  : constant Wide_Wide_String := "--torrent-dir=";
    Port_Option : constant Wide_Wide_String := "--port=";
@@ -90,6 +92,9 @@ procedure Torrent.Run is
             Input_Path := Arg.Tail_From (Dir_Option'Length + 1);
          elsif Arg.Starts_With (Help_Option) then
             Print_Help;
+         elsif Arg.Starts_With (Log_Option) then
+            Torrent.Logs.Initialize
+              (Arg.Tail_From (Log_Option'Length + 1));
          end if;
       end loop;
    end Parse_Command_Line;
@@ -108,6 +113,8 @@ procedure Torrent.Run is
         ("  " & Out_Option & "path - a directory to save downloaded files");
       Ada.Wide_Wide_Text_IO.Put_Line
         ("  " & Dir_Option & "path - a directory with torrent files");
+      Ada.Wide_Wide_Text_IO.Put_Line
+        ("  " & Log_Option & "path - a trace file, if you need it");
    end Print_Help;
 
 begin
