@@ -1,4 +1,4 @@
---  Copyright (c) 2019 Maxim Reznik <reznikmm@gmail.com>
+--  Copyright (c) 2019-2020 Maxim Reznik <reznikmm@gmail.com>
 --
 --  SPDX-License-Identifier: MIT
 --  License-Filename: LICENSE
@@ -16,8 +16,7 @@ package Torrent.Metainfo_Files is
    type Metainfo_File is tagged limited private;
    --  Metainfo files also known as .torrent files
 
-   type Metainfo_File_Access is access all Metainfo_File'Class
-     with Storage_Size => 0;
+   type Metainfo_File_Access is access all Metainfo_File'Class;
 
    not overriding procedure Read
      (Self      : in out Metainfo_File;

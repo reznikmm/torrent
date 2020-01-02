@@ -67,7 +67,7 @@ package body Torrent.Managers is
       loop
          select
             accept Connected
-              (Value : in not null Torrent.Connections.Connection_Access)
+              (Value : not null Torrent.Connections.Connection_Access)
             do
                Chocked.Append (Value);
                Slowdown := 0.0;
