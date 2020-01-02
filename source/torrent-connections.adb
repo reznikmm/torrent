@@ -1,4 +1,4 @@
---  Copyright (c) 2019 Maxim Reznik <reznikmm@gmail.com>
+--  Copyright (c) 2019-2020 Maxim Reznik <reznikmm@gmail.com>
 --
 --  SPDX-License-Identifier: MIT
 --  License-Filename: LICENSE
@@ -414,6 +414,8 @@ package body Torrent.Connections is
    -----------------
 
    procedure Send_Pieces (Self : in out Connection'Class) is
+      Total_Sent : Ada.Streams.Stream_Element_Count := 0;
+
    begin  --  FIXME check if unchoked
       while not Self.Requests.Is_Empty loop
          declare
@@ -438,9 +440,7 @@ package body Torrent.Connections is
             Data (Data'First + 9 .. Data'First + 12) :=
               To_Int (Natural (Item.Span.From));
 
-            if Self.Closed then
-               return;
-            end if;
+            exit when Self.Closed;
 
             GNAT.Sockets.Send_Socket
               (Socket => Self.Socket,
@@ -448,6 +448,8 @@ package body Torrent.Connections is
                Last   => Last);
 
             pragma Assert (Last = Data'Last);
+
+            Total_Sent := Total_Sent + Data'Length;
 
             Ada.Text_IO.Put_Line
               ("Send piece "
@@ -459,8 +461,12 @@ package body Torrent.Connections is
             --   FIXME Increment send statistic.
          end;
       end loop;
+
+      Self.Listener.Interval_Sent (Total_Sent);
    exception
       when E : GNAT.Sockets.Socket_Error =>
+
+         Self.Listener.Interval_Sent (Total_Sent);
 
          if GNAT.Sockets.Resolve_Exception (E) in
            GNAT.Sockets.Resource_Temporarily_Unavailable
@@ -1022,6 +1028,7 @@ package body Torrent.Connections is
          X := Ada.Streams.Stream_Element (Next mod 256);
          Next := Interfaces.Shift_Right (Next, 8);
       end loop;
+
       return Result;
    end To_Int;
 

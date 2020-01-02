@@ -316,6 +316,16 @@ package body Torrent.Downloaders is
          end if;
       end Piece_Completed;
 
+
+      -------------------
+      -- Interval_Sent --
+      -------------------
+
+      procedure Interval_Sent (Size : Piece_Offset) is
+      begin
+         Downloader.Uploaded := Downloader.Uploaded + Size;
+      end Interval_Sent;
+
       -----------------------
       -- Reserve_Intervals --
       -----------------------

@@ -88,6 +88,10 @@ package Torrent.Connections is
       Piece : Piece_Index;
       Ok    : Boolean) is abstract;
 
+   not overriding procedure Interval_Sent
+     (Self : in out Connection_State_Listener;
+      Size : Piece_Offset) is abstract;
+
    type Connection
      (Meta        : not null Torrent.Metainfo_Files.Metainfo_File_Access;
       Downloader  : not null access Torrent.Downloaders.Downloader'Class;

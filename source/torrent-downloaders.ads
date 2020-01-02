@@ -90,6 +90,8 @@ private
       overriding procedure Unreserve_Intervals
         (Value : Torrent.Connections.Piece_Interval_Array);
 
+      overriding procedure Interval_Sent (Size : Piece_Offset);
+
    private
       Our_Map         : Boolean_Array (1 .. Piece_Count) := (others => False);
       Piece_Size      : Piece_Offset;
