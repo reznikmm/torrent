@@ -4,11 +4,8 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
-with Ada.Calendar.Formatting;
 with Ada.Exceptions;
 with Ada.Text_IO;
-
-with GNAT.SHA1;
 
 with AWS.Response;
 with AWS.Client;
@@ -78,32 +75,10 @@ package body Torrent.Downloaders is
 
    procedure Initialize
      (Self : in out Downloader'Class;
-      Path : League.Strings.Universal_String)
-   is
-
-      procedure Set_Peer_Id (Value : out SHA1);
-
-      -----------------
-      -- Set_Peer_Id --
-      -----------------
-
-      procedure Set_Peer_Id (Value : out SHA1) is
-         Now : constant String := Ada.Calendar.Formatting.Image
-           (Ada.Calendar.Clock);
-         Context : GNAT.SHA1.Context;
-      begin
-         GNAT.SHA1.Update (Context, Path.To_UTF_8_String);
-         GNAT.SHA1.Update (Context, Self.Meta.Info_Hash);
-         GNAT.SHA1.Update (Context, Now);
-         GNAT.SHA1.Update (Context, GNAT.Sockets.Host_Name);
-
-         Value := GNAT.SHA1.Digest (Context);
-         --  For test purpose
-         Value := (1 .. Value'Last => 33);
-      end Set_Peer_Id;
-
+      Peer : SHA1;
+      Path : League.Strings.Universal_String) is
    begin
-      Set_Peer_Id (Self.Peer_Id);
+      Self.Peer_Id := Peer;
       Self.Port := Self.Context.Port;
       Self.Left := 0;
       Self.Downloaded := 0;

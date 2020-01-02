@@ -69,7 +69,8 @@ private
    record
       Path        : League.Strings.Universal_String;
       Downloaders : Downloader_Maps.Map (Capacity);
-      Last        : Natural := 0;
+      Last        : Natural := 0;  --  Last item in Downloaders array
+      Peer_Id     : SHA1;
       Initiator   : Torrent.Initiators.Initiator
                       (Context'Unchecked_Access, Recycle);
       Manager     : Torrent.Managers.Manager

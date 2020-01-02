@@ -34,6 +34,7 @@ package Torrent.Downloaders is
 
    procedure Initialize
      (Self : in out Downloader'Class;
+      Peer : SHA1;
       Path : League.Strings.Universal_String);
 
    procedure Start (Self : aliased in out Downloader'Class);

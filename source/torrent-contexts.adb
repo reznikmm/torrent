@@ -4,6 +4,10 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
+with Ada.Calendar.Formatting;
+
+with GNAT.SHA1;
+
 package body Torrent.Contexts is
 
    -----------------------
@@ -23,7 +27,7 @@ package body Torrent.Contexts is
          File_Count  => File_Count,
          Piece_Count => File.Piece_Count);
    begin
-      Job.Initialize (Self.Path);
+      Job.Initialize (Self.Peer_Id, Self.Path);
       Self.Downloaders.Insert (File.Info_Hash, Job);
    end Add_Metainfo_File;
 
@@ -74,9 +78,29 @@ package body Torrent.Contexts is
 
    procedure Initialize
      (Self : in out Context'Class;
-      Path : League.Strings.Universal_String) is
+      Path : League.Strings.Universal_String)
+   is
+      procedure Set_Peer_Id (Value : out SHA1);
+
+      -----------------
+      -- Set_Peer_Id --
+      -----------------
+
+      procedure Set_Peer_Id (Value : out SHA1) is
+         Now : constant String := Ada.Calendar.Formatting.Image
+           (Ada.Calendar.Clock);
+         Context : GNAT.SHA1.Context;
+      begin
+         GNAT.SHA1.Update (Context, Path.To_UTF_8_String);
+         GNAT.SHA1.Update (Context, Now);
+         GNAT.SHA1.Update (Context, GNAT.Sockets.Host_Name);
+
+         Value := GNAT.SHA1.Digest (Context);
+      end Set_Peer_Id;
+
    begin
       Self.Path := Path;
+      Set_Peer_Id (Self.Peer_Id);
    end Initialize;
 
    -----------
