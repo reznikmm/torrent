@@ -4,27 +4,26 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
-with Ada.Containers.Vectors;
+with Ada.Calendar.Formatting;
 with Ada.Exceptions;
 with Ada.Text_IO;
 
-with Torrent.Downloaders; use Torrent.Downloaders;
+with GNAT.Sockets;
+
+with Torrent.Logs;
 
 package body Torrent.Managers is
 
-   package Connection_Vectors is new Ada.Containers.Vectors
-     (Index_Type   => Positive,
-      Element_Type => Torrent.Connections.Connection_Access,
-      "="          => Torrent.Connections."=");
-
    task type Seeder is
-      entry Seed (Value : not null Torrent.Connections.Connection_Access);
+      entry Seed
+        (Value : not null Torrent.Connections.Connection_Access;
+         Limit : Ada.Calendar.Time);
+      --  Seed data to given connection until Limit expired, then accept
+      --  Stop_Seeding;
+
       entry Stop_Seeding;
       entry Stop;
    end Seeder;
-
-   type Connection_Access_Array is
-     array (Positive range <>) of Torrent.Connections.Connection_Access;
 
    -------------
    -- Manager --
@@ -52,9 +51,9 @@ package body Torrent.Managers is
       --  30 seconds (3 rounds x 10 seconds).
 
       procedure Best_Connections
-        (Chocked    : Connection_Vectors.Vector;
+        (Chocked    : Torrent.Connections.Connection_Vectors.Vector;
          Protection : in out Protection_Information;
-         Result     : out Connection_Access_Array);
+         Result     : out Torrent.Connections.Connection_Access_Array);
       --  Select a few connection to seed them some data.
 
       ----------------------
@@ -62,9 +61,9 @@ package body Torrent.Managers is
       ----------------------
 
       procedure Best_Connections
-        (Chocked    : Connection_Vectors.Vector;
+        (Chocked    : Torrent.Connections.Connection_Vectors.Vector;
          Protection : in out Protection_Information;
-         Result     : out Connection_Access_Array)
+         Result     : out Torrent.Connections.Connection_Access_Array)
       is
          procedure New_Round (Protection : in out Protection_Information);
          --  Adjust Protection_Information for a new cycle
@@ -117,7 +116,7 @@ package body Torrent.Managers is
          end Update_Protection;
 
          Rate : array (Result'Range) of Piece_Offset;
-         Last : Positive := Result'First - 1;
+         Last : Natural := Result'First - 1;
 
          ------------
          -- Append --
@@ -189,8 +188,11 @@ package body Torrent.Managers is
       Protection : Protection_Information;
       Seeders    : array (1 .. 4) of Seeder;
       Slowdown   : Duration := Default_Slowdown;
-      Chocked    : Connection_Vectors.Vector;
+      Chocked    : Torrent.Connections.Connection_Vectors.Vector;
+      Selector   : GNAT.Sockets.Selector_Type;
    begin
+      GNAT.Sockets.Create_Selector (Selector);
+
       loop
          select
             accept Connected
@@ -207,36 +209,49 @@ package body Torrent.Managers is
          end select;
 
          declare
-            List : Connection_Access_Array (Seeders'Range);
+            use type Ada.Calendar.Time;
+
+            List  : Torrent.Connections.Connection_Access_Array
+              (Seeders'Range);
+            Now   : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+            Limit : constant Ada.Calendar.Time := Now + Seed_Time;
+            Count : Natural := 0;
          begin
             Best_Connections (Chocked, Protection, List);
 
             for J in List'Range loop
                if List (J) /= null then
-                  Seeders (J).Seed (List (J));
+                  Seeders (J).Seed (List (J), Limit);
+                  Count := Count + 1;
                end if;
             end loop;
 
-            --  process chocked connections.
+            pragma Debug
+              (Torrent.Logs.Enabled,
+               Torrent.Logs.Print
+                 (Ada.Calendar.Formatting.Image (Now)
+                  & " Unchocked=" & (Count'Image)
+                  & " /" & (Chocked.Length'Img)));
+
+            Torrent.Connections.Serve_All (Selector, Chocked, List, Limit);
+
+            --  delete chocked connections.
             declare
-               J : Positive := 1;
+               J    : Positive := 1;
                Conn : Torrent.Connections.Connection_Access;
             begin
                while J <= Chocked.Last_Index loop
                   Conn := Chocked (J);
 
-                  if not Conn.Connected then
+                  if Conn.Connected then
+                     J := J + 1;
+                  else
                      Recycle.Enqueue (Conn);
                      Chocked.Delete (J);
 
                      if Chocked.Is_Empty then
                         Slowdown := Default_Slowdown;
                      end if;
-                  elsif not (for some X of List => X = Conn) then
-                     Conn.Serve (Conn.Downloader.Completed, 1.0);
-                     J := J + 1;
-                  else
-                     J := J + 1;
                   end if;
                end loop;
             end;
@@ -252,8 +267,15 @@ package body Torrent.Managers is
       for J in Seeders'Range loop
          Seeders (J).Stop;
       end loop;
+
+      GNAT.Sockets.Close_Selector (Selector);
    exception
       when E : others =>
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              (Ada.Exceptions.Exception_Information (E)));
+
          Ada.Text_IO.Put_Line (Ada.Exceptions.Exception_Information (E));
    end Manager;
 
@@ -262,9 +284,8 @@ package body Torrent.Managers is
    -------------
 
    task body Seeder is
-      Seed_Time : constant Duration := 10.0;
-
       Conn : Torrent.Connections.Connection_Access;
+      Time : Ada.Calendar.Time;
    begin
       loop
          select
@@ -273,16 +294,18 @@ package body Torrent.Managers is
 
          or
             accept Seed
-              (Value : not null Torrent.Connections.Connection_Access)
+              (Value : not null Torrent.Connections.Connection_Access;
+               Limit : Ada.Calendar.Time)
             do
                Conn := Value;
+               Time := Limit;
             end Seed;
 
          end select;
 
          if Conn.Intrested then
             Conn.Set_Choked (False);
-            Conn.Serve (Conn.Downloader.Completed, Seed_Time);
+            Conn.Serve (Time);
             Conn.Set_Choked (True);
          end if;
 

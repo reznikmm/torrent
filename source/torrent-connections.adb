@@ -4,17 +4,16 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
-with Ada.Calendar;
 with Ada.Exceptions;
-with Ada.Text_IO;
 with Ada.Unchecked_Conversion;
 
 with Interfaces;
 
 with GNAT.SHA1;
 
-with Torrent.Logs;
+with Torrent.Downloaders;
 with Torrent.Handshakes; use Torrent.Handshakes;
+with Torrent.Logs;
 
 package body Torrent.Connections is
 
@@ -50,7 +49,10 @@ package body Torrent.Connections is
      (Self      : in out Connection'Class;
       Completed : Piece_Index_Array);
 
-   procedure Send_Pieces (Self : in out Connection'Class);
+   procedure Send_Pieces
+     (Self  : in out Connection'Class;
+      Limit : Ada.Calendar.Time);
+
    procedure Unreserve_Intervals (Self : in out Connection'Class);
 
    procedure Close_Connection (Self : in out Connection'Class);
@@ -62,7 +64,6 @@ package body Torrent.Connections is
    procedure Close_Connection (Self : in out Connection'Class) is
    begin
       GNAT.Sockets.Close_Socket (Self.Socket);
-      GNAT.Sockets.Close_Selector (Self.Selector);
       Self.Closed := True;
       Self.Unreserve_Intervals;
    end Close_Connection;
@@ -100,14 +101,7 @@ package body Torrent.Connections is
       GNAT.Sockets.Set_Socket_Option
         (Socket => Self.Socket,
          Level  => GNAT.Sockets.Socket_Level,
-         Option => (GNAT.Sockets.Receive_Timeout, 0.1));
-
-      GNAT.Sockets.Set_Socket_Option
-        (Socket => Self.Socket,
-         Level  => GNAT.Sockets.Socket_Level,
-         Option => (GNAT.Sockets.Send_Timeout, 0.0));
-
-      GNAT.Sockets.Create_Selector (Self.Selector);
+         Option => (GNAT.Sockets.Receive_Timeout, 0.0));
 
       Self.Initialize (Self.My_Peer_Id, Self.Peer, Self.Listener);
       Self.Sent_Handshake := True;
@@ -117,10 +111,16 @@ package body Torrent.Connections is
       Self.Last_Completed := Completed'Last;
    exception
       when E : others =>
-         Ada.Text_IO.Put_Line
-           ("Raised on Do_Handshake:" & GNAT.Sockets.Image (Self.Peer));
-         Ada.Text_IO.Put_Line
-           (Ada.Exceptions.Exception_Information (E));
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              ("Raised on Do_Handshake:" & GNAT.Sockets.Image (Self.Peer)));
+
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              (Ada.Exceptions.Exception_Information (E)));
+
          Self.Close_Connection;
          return;
    end Do_Handshake;
@@ -386,10 +386,12 @@ package body Torrent.Connections is
                & Integer'Image (Get_Int (Data, 9))
                & Integer'Image (Get_Int (Data, 13))));
       else
-         Ada.Text_IO.Put_Line
-           ("Send "
-            & GNAT.Sockets.Image (Self.Peer)
-            & (Data (Data'First + 4)'Img));
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              ("Send "
+               & GNAT.Sockets.Image (Self.Peer)
+               & (Data (Data'First + 4)'Img)));
       end if;
    exception
       when E : GNAT.Sockets.Socket_Error =>
@@ -397,26 +399,14 @@ package body Torrent.Connections is
          if GNAT.Sockets.Resolve_Exception (E) in
            GNAT.Sockets.Resource_Temporarily_Unavailable
          then
-            --  If timeout then wait until the socket is ready to transmit and
-            --  try again
-            declare
-               Status : GNAT.Sockets.Selector_Status;
-               R_Set  : GNAT.Sockets.Socket_Set_Type;
-               W_Set  : GNAT.Sockets.Socket_Set_Type;
-            begin
-               GNAT.Sockets.Set (W_Set, Self.Socket);
+            GNAT.Sockets.Set_Socket_Option
+              (Socket => Self.Socket,
+               Level  => GNAT.Sockets.Socket_Level,
+               Option => (GNAT.Sockets.Receive_Timeout,
+                          GNAT.Sockets.Forever));
 
-               GNAT.Sockets.Check_Selector
-                 (Selector     => Self.Selector,
-                  R_Socket_Set => R_Set,
-                  W_Socket_Set => W_Set,
-                  Status       => Status);
-
-               if Status in GNAT.Sockets.Completed then
-                  Self.Send_Message (Data);
-                  return;
-               end if;
-            end;
+            Self.Send_Message (Data);
+            return;
          end if;
 
          pragma Debug
@@ -436,7 +426,12 @@ package body Torrent.Connections is
    -- Send_Pieces --
    -----------------
 
-   procedure Send_Pieces (Self : in out Connection'Class) is
+   procedure Send_Pieces
+     (Self  : in out Connection'Class;
+      Limit : Ada.Calendar.Time)
+   is
+      use type Ada.Calendar.Time;
+
       Total_Sent : Ada.Streams.Stream_Element_Count := 0;
 
    begin  --  FIXME check if unchoked
@@ -464,6 +459,12 @@ package body Torrent.Connections is
               To_Int (Natural (Item.Span.From));
 
             exit when Self.Closed;
+
+            GNAT.Sockets.Set_Socket_Option
+              (Socket => Self.Socket,
+               Level  => GNAT.Sockets.Socket_Level,
+               Option => (GNAT.Sockets.Receive_Timeout,
+                          Limit - Ada.Calendar.Clock));
 
             GNAT.Sockets.Send_Socket
               (Socket => Self.Socket,
@@ -518,8 +519,7 @@ package body Torrent.Connections is
 
    procedure Serve
      (Self      : in out Connection'Class;
-      Completed : Piece_Index_Array;
-      Time      : Duration)
+      Limit     : Ada.Calendar.Time)
    is
       use type Ada.Calendar.Time;
 
@@ -611,32 +611,35 @@ package body Torrent.Connections is
 
          Index : Piece_Index;
       begin
-         pragma Debug
-           (Torrent.Logs.Enabled,
-            Torrent.Logs.Print
-              ("MSG:" & GNAT.Sockets.Image (Self.Peer) & " "));
-
          case Data (Data'First) is
             when 0 =>  --  choke
                pragma Debug
-                 (Torrent.Logs.Enabled, Torrent.Logs.Print ("choke"));
+                 (Torrent.Logs.Enabled,
+                  Torrent.Logs.Print
+                    (GNAT.Sockets.Image (Self.Peer) & " choke"));
 
                Self.We_Choked := True;
                Self.Unreserve_Intervals;
             when 1 =>  -- unchoke
                pragma Debug
-                 (Torrent.Logs.Enabled, Torrent.Logs.Print ("unchoke"));
+                 (Torrent.Logs.Enabled,
+                  Torrent.Logs.Print
+                    (GNAT.Sockets.Image (Self.Peer) & " unchoke"));
 
                Self.We_Choked := False;
                Send_Initial_Requests;
             when 2 =>  -- interested
                pragma Debug
-                 (Torrent.Logs.Enabled, Torrent.Logs.Print ("interested"));
+                 (Torrent.Logs.Enabled,
+                  Torrent.Logs.Print
+                    (GNAT.Sockets.Image (Self.Peer) & " interested"));
 
                Self.He_Intrested := True;
             when 3 =>  -- not interested
                pragma Debug
-                 (Torrent.Logs.Enabled, Torrent.Logs.Print ("not interested"));
+                 (Torrent.Logs.Enabled,
+                  Torrent.Logs.Print
+                    (GNAT.Sockets.Image (Self.Peer) & " not interested"));
 
                Self.He_Intrested := False;
             when 4 =>  -- have
@@ -648,7 +651,9 @@ package body Torrent.Connections is
                   if Index in Self.Piece_Map'Range then
                      pragma Debug
                        (Torrent.Logs.Enabled,
-                        Torrent.Logs.Print ("have" & (Index'Img)));
+                        Torrent.Logs.Print
+                          (GNAT.Sockets.Image (Self.Peer)
+                           & " have" & (Index'Img)));
 
                      Self.Piece_Map (Index) := True;
                      Check_Intrested;
@@ -656,7 +661,9 @@ package body Torrent.Connections is
                end;
             when 5 => -- bitfield
                pragma Debug
-                 (Torrent.Logs.Enabled, Torrent.Logs.Print ("bitfield"));
+                 (Torrent.Logs.Enabled,
+                  Torrent.Logs.Print
+                    (GNAT.Sockets.Image (Self.Peer) & " bitfield"));
 
                Index := 1;
 
@@ -691,7 +698,8 @@ package body Torrent.Connections is
                   pragma Debug
                     (Torrent.Logs.Enabled,
                      Torrent.Logs.Print
-                       ("request" & (Next.Piece'Img) & (Next.Span.From'Img)));
+                       (GNAT.Sockets.Image (Self.Peer) & " request"
+                        & (Next.Piece'Img) & (Next.Span.From'Img)));
 
                   if Next.Span.To > Max_Interval_Size then
                      return;
@@ -715,7 +723,8 @@ package body Torrent.Connections is
                   pragma Debug
                     (Torrent.Logs.Enabled,
                      Torrent.Logs.Print
-                       ("piece" & (Index'Img) & (Offset'Img)));
+                       (GNAT.Sockets.Image (Self.Peer) & " piece"
+                        & (Index'Img) & (Offset'Img)));
 
                   if Index in Self.Piece_Map'Range
                     and then Data'Length > 9
@@ -736,7 +745,8 @@ package body Torrent.Connections is
                   pragma Debug
                     (Torrent.Logs.Enabled,
                      Torrent.Logs.Print
-                       ("cancel" & (Next.Piece'Img) & (Next.Span.From'Img)));
+                       (GNAT.Sockets.Image (Self.Peer) & " cancel"
+                        & (Next.Piece'Img) & (Next.Span.From'Img)));
 
                   Next.Span.To := Next.Span.From + Next.Span.To - 1;
 
@@ -751,7 +761,9 @@ package body Torrent.Connections is
             when others =>
                pragma Debug
                  (Torrent.Logs.Enabled,
-                  Torrent.Logs.Print ("unkown" & (Data (Data'First)'Img)));
+                  Torrent.Logs.Print
+                    (GNAT.Sockets.Image (Self.Peer) & " unkown"
+                     & (Data (Data'First)'Img)));
          end case;
       end On_Message;
 
@@ -898,7 +910,9 @@ package body Torrent.Connections is
                Self.Pipelined.Expire (J) := Self.Pipelined.Expire (J) - 1;
 
                if Self.Pipelined.Expire (J) = 0 then
-                  Ada.Text_IO.Put_Line ("Re-send lost request:");
+                  pragma Debug
+                    (Torrent.Logs.Enabled,
+                     Torrent.Logs.Print ("Re-send lost request:"));
 
                   Self.Pipelined.Expire (J) :=
                     Self.Pipelined.Length * Expire_Loops;
@@ -965,9 +979,10 @@ package body Torrent.Connections is
          end loop;
       end Send_Initial_Requests;
 
-      Limit : constant Ada.Calendar.Time := Ada.Calendar.Clock + Time;
+      Completed : constant Piece_Index_Array := Self.Downloader.Completed;
+
       Last  : Ada.Streams.Stream_Element_Count := Self.Unparsed.Length;
-      Data  : Ada.Streams.Stream_Element_Array (1 .. 20_000);
+      Data  : Ada.Streams.Stream_Element_Array (1 .. Max_Interval_Size + 20);
    begin
       if Self.Closed then
          return;
@@ -993,7 +1008,7 @@ package body Torrent.Connections is
       Data (1 .. Last) := Self.Unparsed.To_Stream_Element_Array;
       Self.Unparsed.Clear;
 
-      while Limit >= Ada.Calendar.Clock loop
+      loop
          declare
             Read : Ada.Streams.Stream_Element_Count;
          begin
@@ -1027,10 +1042,15 @@ package body Torrent.Connections is
                then
                   null;  --  Timeout on Read
                else
-                  Ada.Text_IO.Put_Line
-                    ("Raised on Read:" & GNAT.Sockets.Image (Self.Peer));
-                  Ada.Text_IO.Put_Line
-                    (Ada.Exceptions.Exception_Information (E));
+                  pragma Debug
+                    (Torrent.Logs.Enabled,
+                     Torrent.Logs.Print
+                       ("Raised on Read:" & GNAT.Sockets.Image (Self.Peer)));
+
+                  pragma Debug
+                    (Torrent.Logs.Enabled,
+                     Torrent.Logs.Print
+                       (Ada.Exceptions.Exception_Information (E)));
 
                   Self.Close_Connection;
                   return;
@@ -1050,23 +1070,92 @@ package body Torrent.Connections is
 
          end if;
 
-         Self.Send_Pieces;
+         Self.Send_Pieces (Limit);
+
+         exit when Ada.Calendar.Clock > Limit;
       end loop;
 
       if Last > 0 then
-         Self.Unparsed.Clear;
          Self.Unparsed.Append (Data (1 .. Last));
       end if;
 
    exception
       when E : others =>
-         Ada.Text_IO.Put_Line
-           ("Raised on Serve:" & GNAT.Sockets.Image (Self.Peer));
-         Ada.Text_IO.Put_Line
-           (Ada.Exceptions.Exception_Information (E));
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              ("Raised on Serve:" & GNAT.Sockets.Image (Self.Peer)));
+
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              (Ada.Exceptions.Exception_Information (E)));
          Self.Close_Connection;
          return;
    end Serve;
+
+   ---------------
+   -- Serve_All --
+   ---------------
+
+   procedure Serve_All
+     (Selector : GNAT.Sockets.Selector_Type;
+      Vector   : in out Connection_Vectors.Vector;
+      Except   : Connection_Access_Array;
+      Limit    : Ada.Calendar.Time)
+   is
+      use type Ada.Calendar.Time;
+
+      Now    : Ada.Calendar.Time;
+      Status : GNAT.Sockets.Selector_Status;
+      R_Set  : GNAT.Sockets.Socket_Set_Type;
+      W_Set  : GNAT.Sockets.Socket_Set_Type;
+   begin
+      loop
+         for C of Vector loop
+            if C.Connected
+              and then not (for some X of Except => X = C)
+            then
+               GNAT.Sockets.Set (R_Set, C.Socket);
+            end if;
+         end loop;
+
+         Now := Ada.Calendar.Clock;
+
+         if GNAT.Sockets.Is_Empty (R_Set) or Now >= Limit then
+            return;
+         end if;
+
+         GNAT.Sockets.Check_Selector
+           (Selector     => Selector,
+            R_Socket_Set => R_Set,
+            W_Socket_Set => W_Set,
+            Status       => Status,
+            Timeout      => Limit - Now);
+
+         if Status in GNAT.Sockets.Completed then
+            for C of Vector loop
+               if C.Connected
+                 and then GNAT.Sockets.Is_Set (R_Set, C.Socket)
+               then
+                  GNAT.Sockets.Clear (R_Set, C.Socket);
+                  C.Serve (Now);
+               end if;
+            end loop;
+         end if;
+
+         GNAT.Sockets.Empty (R_Set);
+      end loop;
+   end Serve_All;
+
+   ------------------
+   -- Serve_Needed --
+   ------------------
+
+   function Serve_Needed (Self : Connection'Class) return Boolean is
+   begin
+      return not Self.Choked_Sent;
+   end Serve_Needed;
 
    ----------------
    -- Set_Choked --

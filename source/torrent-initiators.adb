@@ -111,6 +111,7 @@ package body Torrent.Initiators is
          Socket  : GNAT.Sockets.Socket_Type;
       begin
          GNAT.Sockets.Accept_Socket (Server, Socket, Address);
+
          pragma Debug
            (Torrent.Logs.Enabled,
             Torrent.Logs.Print ("Accepted: " & GNAT.Sockets.Image (Address)));
@@ -263,8 +264,10 @@ package body Torrent.Initiators is
             begin
                exit when First.Time > Time;
 
-               Ada.Text_IO.Put_Line
-                 ("Connecting: " & GNAT.Sockets.Image (First.Addr));
+               pragma Debug
+                 (Torrent.Logs.Enabled,
+                  Torrent.Logs.Print
+                    ("Connecting: " & GNAT.Sockets.Image (First.Addr)));
 
                GNAT.Sockets.Create_Socket (Socket);
                GNAT.Sockets.Connect_Socket
@@ -377,6 +380,11 @@ package body Torrent.Initiators is
       end loop;
    exception
       when E : others =>
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              ("Initiator: " & Ada.Exceptions.Exception_Information (E)));
+
          Ada.Text_IO.Put_Line
            ("Initiator: " & Ada.Exceptions.Exception_Information (E));
    end Initiator;

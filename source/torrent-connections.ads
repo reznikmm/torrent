@@ -4,10 +4,11 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
-with Ada.Containers.Vectors;
-with Ada.Finalization;
+with Ada.Calendar;
 with Ada.Containers.Synchronized_Queue_Interfaces;
 with Ada.Containers.Unbounded_Synchronized_Queues;
+with Ada.Containers.Vectors;
+with Ada.Finalization;
 
 with GNAT.Sockets;
 
@@ -21,6 +22,9 @@ package Torrent.Connections is
 
    type Connection is tagged;
    type Connection_Access is access all Connection'Class;
+
+   type Connection_Access_Array is
+     array (Positive range <>) of Connection_Access;
 
    package Queue_Interfaces is new
      Ada.Containers.Synchronized_Queue_Interfaces (Connection_Access);
@@ -119,14 +123,28 @@ package Torrent.Connections is
    function Downloaded (Self : in out Connection'Class) return Piece_Offset;
    --  Return amount of data received since last call.
 
+   function Serve_Needed (Self : Connection'Class) return Boolean;
+   --  Connection has some pending messages to send them right now
+
    procedure Set_Choked
      (Self  : in out Connection'Class;
       Value : Boolean);
 
    procedure Serve
-     (Self      : in out Connection'Class;
-      Completed : Piece_Index_Array;
-      Time      : Duration);
+     (Self  : in out Connection'Class;
+      Limit : Ada.Calendar.Time);
+   --  Process input messages and seed some data if unchoked. Limit is a time
+   --  when it should complete.
+
+   package Connection_Vectors is new Ada.Containers.Vectors
+     (Index_Type   => Positive,
+      Element_Type => Connection_Access);
+
+   procedure Serve_All
+     (Selector : GNAT.Sockets.Selector_Type;
+      Vector   : in out Connection_Vectors.Vector;
+      Except   : Connection_Access_Array;
+      Limit    : Ada.Calendar.Time);
 
    function Is_Valid_Piece
      (Meta    : not null Torrent.Metainfo_Files.Metainfo_File_Access;
@@ -156,7 +174,6 @@ private
    record
       Peer           : GNAT.Sockets.Sock_Addr_Type;
       Socket         : GNAT.Sockets.Socket_Type;
-      Selector       : GNAT.Sockets.Selector_Type;
       Sent_Handshake : Boolean;
       Got_Handshake  : Boolean;
       Closed         : Boolean;

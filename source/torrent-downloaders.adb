@@ -212,6 +212,11 @@ package body Torrent.Downloaders is
 
    exception
       when E : others =>
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              (Ada.Exceptions.Exception_Information (E)));
+
          Ada.Text_IO.Put_Line (Ada.Exceptions.Exception_Information (E));
    end Start;
 

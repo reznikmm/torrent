@@ -1,4 +1,4 @@
---  Copyright (c) 2019 Maxim Reznik <reznikmm@gmail.com>
+--  Copyright (c) 2019-2020 Maxim Reznik <reznikmm@gmail.com>
 --
 --  SPDX-License-Identifier: MIT
 --  License-Filename: LICENSE
@@ -25,5 +25,6 @@ package Torrent is
      with Pack;
 
    Max_Interval_Size : constant := 16 * 1024;
+   Seed_Time         : constant Duration := 10.0;
 
 end Torrent;
