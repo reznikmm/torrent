@@ -125,6 +125,17 @@ package body Torrent.Connections is
          return;
    end Do_Handshake;
 
+   ----------------
+   -- Downloaded --
+   ----------------
+
+   function Downloaded (Self : in out Connection'Class) return Piece_Offset is
+   begin
+      return Result : constant Piece_Offset := Self.Downloaded do
+         Self.Downloaded := Self.Downloaded / 3;
+      end return;
+   end Downloaded;
+
    -------------------
    -- Get_Handshake --
    -------------------
@@ -180,6 +191,7 @@ package body Torrent.Connections is
       Self.Last_Request := 0;
       Self.Last_Completed := 0;
       Self.Listener := Listener;
+      Self.Downloaded := 0;
       Self.Current_Piece := (0, Intervals => <>);
       Self.Piece_Map := (others => False);
    end Initialize;
@@ -810,6 +822,8 @@ package body Torrent.Connections is
          From : constant Piece_Offset := Piece_Offset (Offset);
          J    : Natural := 1;
       begin
+         Self.Downloaded := Self.Downloaded + Data'Length;
+
          Self.Storage.Write
            (Offset => Ada.Streams.Stream_Element_Count (Index - 1)
                         * Self.Meta.Piece_Length

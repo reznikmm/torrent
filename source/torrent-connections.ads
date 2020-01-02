@@ -115,7 +115,9 @@ package Torrent.Connections is
    function Peer (Self : Connection'Class) return GNAT.Sockets.Sock_Addr_Type;
    function Connected (Self : Connection'Class) return Boolean;
    function Intrested (Self : Connection'Class) return Boolean;
-   function Speed (Unused : Connection'Class) return Natural is (0);
+
+   function Downloaded (Self : in out Connection'Class) return Piece_Offset;
+   --  Return amount of data received since last call.
 
    procedure Set_Choked
      (Self  : in out Connection'Class;
@@ -172,6 +174,7 @@ private
       Last_Request   : Natural;
       Last_Completed : Torrent.Piece_Count;
       Listener       : Connection_State_Listener_Access;
+      Downloaded     : Piece_Offset;
       Piece_Map      : Boolean_Array (1 .. Piece_Count);
    end record;
 end Torrent.Connections;
