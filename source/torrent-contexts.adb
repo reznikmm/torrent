@@ -107,16 +107,50 @@ package body Torrent.Contexts is
    -- Start --
    -----------
 
-   procedure Start (Self : in out Context'Class) is
+   procedure Start
+     (Self        : in out Context'Class;
+      Next_Update : out Ada.Calendar.Time)
+   is
+      use type Ada.Calendar.Time;
+
    begin
+      Next_Update := Ada.Calendar.Clock + 3600.0;
+
       for J of Self.Downloaders loop
          J.Start;
       end loop;
+   end Start;
 
-      delay 3600.0;  --  Seed file for some time
+   ----------
+   -- Stop --
+   ----------
+
+   procedure Stop (Self : in out Context'Class) is
+   begin
+      for J of Self.Downloaders loop
+         J.Stop;
+      end loop;
 
       Self.Manager.Complete;
       Self.Initiator.Stop;
-   end Start;
+   end Stop;
+
+   ------------
+   -- Update --
+   ------------
+
+   procedure Update
+     (Self        : in out Context'Class;
+      Next_Update : out Ada.Calendar.Time)
+   is
+      use type Ada.Calendar.Time;
+
+   begin
+      Next_Update := Ada.Calendar.Clock + 3600.0;
+
+      for J of Self.Downloaders loop
+         J.Update;
+      end loop;
+   end Update;
 
 end Torrent.Contexts;

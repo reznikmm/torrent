@@ -4,6 +4,7 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
+with Ada.Calendar;
 with Ada.Containers;
 with Ada.Directories;
 with Ada.Wide_Wide_Text_IO;
@@ -16,6 +17,7 @@ with Torrent.Contexts;
 with Torrent.Metainfo_Files;
 with Torrent.Connections;
 with Torrent.Logs;
+with Torrent.Shutdown;
 
 procedure Torrent.Run is
    function "+"
@@ -44,7 +46,7 @@ procedure Torrent.Run is
    Port        : Positive := 33411;
    Path        : League.Strings.Universal_String := +"result";
    Input_Path  : League.Strings.Universal_String := +"torrents";
-   Total : Ada.Containers.Count_Type := 0;
+   Total       : Ada.Containers.Count_Type := 0;
 
    ---------------------
    -- Increment_Total --
@@ -150,9 +152,24 @@ begin
 
          Context.Add_Metainfo_File (Meta);
       end Add;
+
+      Next_Update : Ada.Calendar.Time;
    begin
       Context.Initialize (Path);
       Each_Torrents (Input_Path, Add'Access);
-      Context.Start;
+      Context.Start (Next_Update);
+
+      loop
+         select
+            Torrent.Shutdown.Signal.Wait_SIGINT;
+            Ada.Wide_Wide_Text_IO.Put_Line ("Ctrl+C!");
+            exit;
+         or
+            delay until Next_Update;
+            Context.Update (Next_Update);
+         end select;
+      end loop;
+
+      Context.Stop;
    end;
 end Torrent.Run;

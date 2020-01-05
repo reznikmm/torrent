@@ -4,9 +4,6 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
-with Ada.Exceptions;
-with Ada.Text_IO;
-
 with AWS.Response;
 with AWS.Client;
 with AWS.Messages;
@@ -15,12 +12,17 @@ with League.IRIs;
 
 with Torrent.Contexts;
 with Torrent.Logs;
+with Torrent.Trackers;
 
 package body Torrent.Downloaders is
 
    use type Ada.Streams.Stream_Element_Offset;
 
    procedure Check_Stored_Pieces (Self : in out Downloader'Class);
+
+   procedure Send_Tracker_Request
+     (Self  : in out Downloader'Class;
+      Event : Torrent.Trackers.Announcement_Kind);
 
    -------------------------
    -- Check_Stored_Pieces --
@@ -100,61 +102,62 @@ package body Torrent.Downloaders is
          Torrent.Logs.Print ("Left bytes:" & (Self.Left'Img)));
    end Initialize;
 
-   -----------
-   -- Start --
-   -----------
+   --------------------------
+   -- Send_Tracker_Request --
+   --------------------------
 
-   procedure Start (Self : aliased in out Downloader'Class) is
-      procedure Download;
+   procedure Send_Tracker_Request
+     (Self  : in out Downloader'Class;
+      Event : Torrent.Trackers.Announcement_Kind)
+   is
+      URL : constant League.IRIs.IRI := Trackers.Event_URL
+        (Tracker    => Self.Meta.Announce,
+         Info_Hash  => Self.Meta.Info_Hash,
+         Peer_Id    => Self.Peer_Id,
+         Port       => Self.Port,
+         Uploaded   => Self.Uploaded,
+         Downloaded => Self.Downloaded,
+         Left       => Self.Left,
+         Event      => Event);
 
-      --------------
-      -- Download --
-      --------------
+      Reply : constant AWS.Response.Data :=
+        AWS.Client.Get
+          (URL.To_Universal_String.To_UTF_8_String,
+           Follow_Redirection => True);
+   begin
+      pragma Debug
+        (Torrent.Logs.Enabled,
+         Torrent.Logs.Print
+           ("Tracker URL:" & URL.To_Universal_String.To_UTF_8_String));
 
-      procedure Download is
-         URL : League.IRIs.IRI := Trackers.Event_URL
-           (Tracker    => Self.Meta.Announce,
-            Info_Hash  => Self.Meta.Info_Hash,
-            Peer_Id    => Self.Peer_Id,
-            Port       => Self.Port,
-            Uploaded   => Self.Uploaded,
-            Downloaded => Self.Downloaded,
-            Left       => Self.Left,
-            Event      => Trackers.Started);
-
-         Reply : constant AWS.Response.Data :=
-           AWS.Client.Get
-             (URL.To_Universal_String.To_UTF_8_String,
-              Follow_Redirection => True);
-      begin
-         if AWS.Response.Status_Code (Reply) not in AWS.Messages.Success then
-            pragma Debug
-              (Torrent.Logs.Enabled,
-               Torrent.Logs.Print
-                 ("Tracker request failed:"
-                  & AWS.Messages.Status_Code'Image
-                    (AWS.Response.Status_Code (Reply))));
-
-            pragma Debug
-              (Torrent.Logs.Enabled,
-               Torrent.Logs.Print (URL.To_Universal_String.To_UTF_8_String));
-
-            return;
-         end if;
-
-         Self.Tracker_Response := new Torrent.Trackers.Response'
-           (Trackers.Parse (AWS.Response.Message_Body (Reply)));
-
+      if AWS.Response.Status_Code (Reply) not in AWS.Messages.Success then
          pragma Debug
            (Torrent.Logs.Enabled,
             Torrent.Logs.Print
-              ("Peer_Count:" & (Self.Tracker_Response.Peer_Count'Img)));
+              ("Tracker request failed:"
+               & AWS.Messages.Status_Code'Image
+                 (AWS.Response.Status_Code (Reply))));
 
-         for J in 1 .. Self.Tracker_Response.Peer_Count loop
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print (URL.To_Universal_String.To_UTF_8_String));
+
+         return;
+      elsif Self.Left = 0 or Event not in Torrent.Trackers.Started then
+         return;
+      end if;
+
+      declare
+         TR : constant Torrent.Trackers.Response :=
+           Trackers.Parse (AWS.Response.Message_Body (Reply));
+      begin
+         pragma Debug
+           (Torrent.Logs.Enabled,
+            Torrent.Logs.Print
+              ("Peer_Count:" & (TR.Peer_Count'Img)));
+
+         for J in 1 .. TR.Peer_Count loop
             declare
-               TR : Torrent.Trackers.Response
-                 renames Self.Tracker_Response.all;
-
                Address    : constant GNAT.Sockets.Sock_Addr_Type :=
                  (Family => GNAT.Sockets.Family_Inet,
                   Addr   => GNAT.Sockets.Inet_Addr
@@ -162,63 +165,45 @@ package body Torrent.Downloaders is
                   Port   => GNAT.Sockets.Port_Type (TR.Peer_Port (J)));
 
             begin
+               pragma Debug
+                 (Torrent.Logs.Enabled,
+                  Torrent.Logs.Print
+                    ((J'Img) & " /" & (TR.Peer_Count'Img)
+                     & " Initialize connection to "
+                     & TR.Peer_Address (J).To_UTF_8_String));
+
                Self.Context.Connect (Self'Unchecked_Access, Address);
             end;
          end loop;
+      end;
+   end Send_Tracker_Request;
 
-         URL := Trackers.Event_URL
-           (Tracker    => Self.Meta.Announce,
-            Info_Hash  => Self.Meta.Info_Hash,
-            Peer_Id    => Self.Peer_Id,
-            Port       => Self.Port,
-            Uploaded   => Self.Uploaded,
-            Downloaded => Self.Downloaded,
-            Left       => Self.Left,
-            Event      => Trackers.Completed);
+   -----------
+   -- Start --
+   -----------
 
-         declare
-            Ignore : constant AWS.Response.Data :=
-              AWS.Client.Get
-                (URL.To_Universal_String.To_UTF_8_String,
-                 Follow_Redirection => True);
-         begin
-            null;  --  Just notify tracker
-         end;
-      end Download;
-
+   procedure Start (Self : aliased in out Downloader'Class) is
    begin
-      if Self.Left > 0  then
-         Download;
-      else
-         declare
-            URL : constant League.IRIs.IRI := Trackers.Event_URL
-              (Tracker    => Self.Meta.Announce,
-               Info_Hash  => Self.Meta.Info_Hash,
-               Peer_Id    => Self.Peer_Id,
-               Port       => Self.Port,
-               Uploaded   => Self.Uploaded,
-               Downloaded => Self.Downloaded,
-               Left       => Self.Left,
-               Event      => Trackers.Regular);
-
-            Ignore : constant AWS.Response.Data :=
-              AWS.Client.Get
-                (URL.To_Universal_String.To_UTF_8_String,
-                 Follow_Redirection => True);
-         begin
-            null;  --  Just notify tracker
-         end;
-      end if;
-
-   exception
-      when E : others =>
-         pragma Debug
-           (Torrent.Logs.Enabled,
-            Torrent.Logs.Print
-              (Ada.Exceptions.Exception_Information (E)));
-
-         Ada.Text_IO.Put_Line (Ada.Exceptions.Exception_Information (E));
+      Self.Send_Tracker_Request (Torrent.Trackers.Started);
    end Start;
+
+   ----------
+   -- Stop --
+   ----------
+
+   procedure Stop (Self : in out Downloader'Class) is
+   begin
+      Self.Send_Tracker_Request (Torrent.Trackers.Stopped);
+   end Stop;
+
+   ------------
+   -- Update --
+   ------------
+
+   procedure Update (Self : in out Downloader'Class) is
+   begin
+      Self.Send_Tracker_Request (Torrent.Trackers.Regular);
+   end Update;
 
    --------------------
    -- Tracked_Pieces --

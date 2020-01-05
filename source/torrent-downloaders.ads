@@ -15,7 +15,6 @@ with League.Strings;
 with Torrent.Connections;
 with Torrent.Metainfo_Files;
 with Torrent.Storages;
-with Torrent.Trackers;
 limited with Torrent.Contexts;
 
 package Torrent.Downloaders is
@@ -38,6 +37,8 @@ package Torrent.Downloaders is
       Path : League.Strings.Universal_String);
 
    procedure Start (Self : aliased in out Downloader'Class);
+   procedure Stop (Self : in out Downloader'Class);
+   procedure Update (Self : in out Downloader'Class);
 
    function Completed (Self : Downloader'Class)
      return Torrent.Connections.Piece_Index_Array
@@ -54,8 +55,6 @@ private
      (Index_Type   => Positive,
       Element_Type => Torrent.Connections.Connection_Access,
       "="          => Torrent.Connections."=");
-
-   type Tracker_Response_Access is access Torrent.Trackers.Response;
 
    package Piece_State_Maps is new Ada.Containers.Ordered_Maps
      (Key_Type     => Piece_Index,
@@ -109,7 +108,6 @@ private
       Piece_Count : Piece_Index) is
      new Ada.Finalization.Limited_Controlled with
       record
-         Tracker_Response : Tracker_Response_Access;
          Tracked          : aliased Tracked_Pieces
            (Downloader'Unchecked_Access, Piece_Count);
          Peer_Id          : SHA1;

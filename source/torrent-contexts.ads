@@ -4,6 +4,7 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
+with Ada.Calendar;
 with Ada.Containers;
 with Ada.Containers.Bounded_Ordered_Maps;
 
@@ -34,7 +35,15 @@ package Torrent.Contexts is
      (Self : in out Context'Class;
       File : not null Torrent.Metainfo_Files.Metainfo_File_Access);
 
-   procedure Start (Self : in out Context'Class);
+   procedure Start
+     (Self        : in out Context'Class;
+      Next_Update : out Ada.Calendar.Time);
+
+   procedure Update
+     (Self        : in out Context'Class;
+      Next_Update : out Ada.Calendar.Time);
+
+   procedure Stop (Self : in out Context'Class);
 
    function Find_Download
      (Self : Context'Class;

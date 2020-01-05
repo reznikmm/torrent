@@ -67,6 +67,7 @@ package body Torrent.Trackers is
       Query.Append (Down_Img (2 .. Down_Img'Last));
       Query.Append ("&left=");
       Query.Append (Left_Img (2 .. Left_Img'Last));
+      Query.Append ("&compact=1");
 
       case Event is
          when Started =>

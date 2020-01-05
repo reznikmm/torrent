@@ -220,6 +220,7 @@ package body Torrent.Initiators is
       GNAT.Sockets.Bind_Socket (Server, Address);
       GNAT.Sockets.Listen_Socket (Server);
 
+      Top_Loop :
       loop
          loop
             select
@@ -241,20 +242,23 @@ package body Torrent.Initiators is
             end select;
          end loop;
 
-         select
-            accept Stop;
-            exit;
-         or
-            accept Connect
-              (Downloader : not null Torrent.Downloaders.Downloader_Access;
-               Address    : GNAT.Sockets.Sock_Addr_Type)
-            do
-               Time := Ada.Calendar.Clock;
-               Plan.Insert ((Time, Address, Downloader));
-            end Connect;
-         or
-            delay until Time;
-         end select;
+         loop
+            select
+               accept Stop;
+               exit Top_Loop;
+            or
+               accept Connect
+                 (Downloader : not null Torrent.Downloaders.Downloader_Access;
+                  Address    : GNAT.Sockets.Sock_Addr_Type)
+               do
+                  Time := Ada.Calendar.Clock;
+                  Plan.Insert ((Time, Address, Downloader));
+               end Connect;
+            or
+               delay until Time;
+               exit;
+            end select;
+         end loop;
 
          while not Plan.Is_Empty loop
             declare
@@ -377,7 +381,7 @@ package body Torrent.Initiators is
                Time := Ada.Calendar.Clock + 1.0;
             end;
          end if;
-      end loop;
+      end loop Top_Loop;
    exception
       when E : others =>
          pragma Debug
