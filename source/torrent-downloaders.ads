@@ -49,6 +49,8 @@ package Torrent.Downloaders is
       Address : GNAT.Sockets.Sock_Addr_Type)
       return Torrent.Connections.Connection_Access;
 
+   function Is_Leacher (Self : Downloader'Class) return Boolean;
+
 private
 
    package Connection_Vectors is new Ada.Containers.Vectors

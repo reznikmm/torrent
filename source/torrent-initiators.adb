@@ -268,18 +268,21 @@ package body Torrent.Initiators is
             begin
                exit when First.Time > Time;
 
-               pragma Debug
-                 (Torrent.Logs.Enabled,
-                  Torrent.Logs.Print
-                    ("Connecting: " & GNAT.Sockets.Image (First.Addr)));
+               if First.Job.Is_Leacher then
+                  pragma Debug
+                    (Torrent.Logs.Enabled,
+                     Torrent.Logs.Print
+                       ("Connecting: " & GNAT.Sockets.Image (First.Addr)));
 
-               GNAT.Sockets.Create_Socket (Socket);
-               GNAT.Sockets.Connect_Socket
-                 (Socket   => Socket,
-                  Server   => First.Addr,
-                  Timeout  => 0.0,
-                  Status   => Ignore);
-               Work.Append ((Socket, First.Addr, First.Job));
+                  GNAT.Sockets.Create_Socket (Socket);
+                  GNAT.Sockets.Connect_Socket
+                    (Socket   => Socket,
+                     Server   => First.Addr,
+                     Timeout  => 0.0,
+                     Status   => Ignore);
+                  Work.Append ((Socket, First.Addr, First.Job));
+               end if;
+
                Plan.Delete_First;
             end;
          end loop;

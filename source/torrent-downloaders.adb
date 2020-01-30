@@ -102,6 +102,15 @@ package body Torrent.Downloaders is
          Torrent.Logs.Print ("Left bytes:" & (Self.Left'Img)));
    end Initialize;
 
+   ----------------
+   -- Is_Leacher --
+   ----------------
+
+   function Is_Leacher (Self : Downloader'Class) return Boolean is
+   begin
+      return Self.Left > 0;
+   end Is_Leacher;
+
    --------------------------
    -- Send_Tracker_Request --
    --------------------------
@@ -274,7 +283,9 @@ package body Torrent.Downloaders is
 
       procedure Piece_Completed
         (Piece : Piece_Index;
-         Ok    : Boolean) is
+         Ok    : Boolean)
+      is
+         Is_Leecher : constant Boolean := Downloader.Left > 0;
       begin
          Our_Map (Piece) := Ok;
 
@@ -290,6 +301,14 @@ package body Torrent.Downloaders is
             Downloader.Left := Downloader.Left - Get_Piece_Size (Piece);
             Downloader.Completed (Downloader.Last_Completed + 1) := Piece;
             Downloader.Last_Completed := Downloader.Last_Completed + 1;
+
+            if Is_Leecher and Downloader.Left = 0 then
+               --  FIXME It's bad to do blocking operation from protected type.
+               pragma Debug
+                 (Torrent.Logs.Enabled,
+                  Torrent.Logs.Print ("Download complete:"));
+               Downloader.Send_Tracker_Request (Torrent.Trackers.Completed);
+            end if;
          end if;
       end Piece_Completed;
 
