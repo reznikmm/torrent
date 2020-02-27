@@ -54,7 +54,10 @@ package body Torrent.Trackers is
       Query  : League.Strings.Universal_String := Tracker.Query;
       Result : League.IRIs.IRI := Tracker;
    begin
-      Query.Append (if Query.Is_Empty then "?" else "&");
+      if not Query.Is_Empty then
+         Query.Append ("&");
+      end if;
+
       Query.Append ("info_hash=");
       Query.Append (URL_Encoded (Info_Hash));
       Query.Append ("&peer_id=");

@@ -22,6 +22,7 @@ package body Torrent.Storages is
          Offset : Ada.Streams.Stream_Element_Count := 0;
       begin
          Root_Path := Path;
+         Is_Empty := True;
 
          for J in 1 .. Meta.File_Count loop
             declare
@@ -45,6 +46,8 @@ package body Torrent.Storages is
                        (Dummy, Name => File);
                      Ada.Streams.Stream_IO.Close (Dummy);
                   end;
+               elsif Ada.Directories.Size (File) not in 0 then
+                  Is_Empty := False;
                end if;
 
             end;
@@ -55,6 +58,15 @@ package body Torrent.Storages is
             end if;
          end loop;
       end Initialize;
+
+      ----------------------
+      -- Is_Empty_Storage --
+      ----------------------
+
+      function Is_Empty_Storage return Boolean is
+      begin
+         return Is_Empty;
+      end Is_Empty_Storage;
 
       ----------
       -- Read --

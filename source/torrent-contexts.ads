@@ -29,6 +29,7 @@ package Torrent.Contexts is
 
    procedure Initialize
      (Self : in out Context'Class;
+      Id   : Torrent.SHA1;
       Path : League.Strings.Universal_String);
 
    procedure Add_Metainfo_File
@@ -81,7 +82,7 @@ private
       Last        : Natural := 0;  --  Last item in Downloaders array
       Peer_Id     : SHA1;
       Initiator   : Torrent.Initiators.Initiator
-                      (Context'Unchecked_Access, Recycle);
+                      (Port, Context'Unchecked_Access, Recycle);
       Manager     : Torrent.Managers.Manager
                       (Context'Unchecked_Access, Recycle);
    end record;

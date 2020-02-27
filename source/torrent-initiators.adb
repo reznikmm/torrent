@@ -203,7 +203,8 @@ package body Torrent.Initiators is
       use type Ada.Calendar.Time;
 
       Address  : constant GNAT.Sockets.Sock_Addr_Type :=
-        (GNAT.Sockets.Family_Inet, GNAT.Sockets.Any_Inet_Addr, 1111);
+        (GNAT.Sockets.Family_Inet, GNAT.Sockets.Any_Inet_Addr,
+         GNAT.Sockets.Port_Type (Port));
       Server   : GNAT.Sockets.Socket_Type;
       Plan     : Planned_Connection_Sets.Set;
       Work     : Socket_Connection_Vectors.Vector;

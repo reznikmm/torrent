@@ -32,7 +32,7 @@ package body Torrent.Managers is
    task body Manager is
       use type Torrent.Connections.Connection_Access;
 
-      Default_Slowdown : constant := 0.5;
+      Default_Slowdown : constant := 1.5;
 
       type Protection_Information is record
          Connection : Torrent.Connections.Connection_Access;

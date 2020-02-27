@@ -30,11 +30,13 @@ package body Torrent.Downloaders is
 
    procedure Check_Stored_Pieces (Self : in out Downloader'Class) is
    begin
-      for J in 1 .. Self.Piece_Count loop
-         if Connections.Is_Valid_Piece (Self.Meta, Self.Storage, J) then
-            Self.Tracked.Piece_Completed (J, True);
-         end if;
-      end loop;
+      if not Self.Storage.Is_Empty_Storage then
+         for J in 1 .. Self.Piece_Count loop
+            if Connections.Is_Valid_Piece (Self.Meta, Self.Storage, J) then
+               Self.Tracked.Piece_Completed (J, True);
+            end if;
+         end loop;
+      end if;
    end Check_Stored_Pieces;
 
    ---------------

@@ -4,12 +4,20 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
+with Ada.Calendar.Formatting;
 with Ada.Calendar;
 with Ada.Containers;
 with Ada.Directories;
 with Ada.Wide_Wide_Text_IO;
 
+with GNAT.SHA1;
+with GNAT.Sockets;
+
 with League.Application;
+with League.Base_Codecs;
+with League.Holders;
+with League.Settings;
+with League.Stream_Element_Vectors;
 with League.String_Vectors;
 with League.Strings;
 
@@ -47,6 +55,38 @@ procedure Torrent.Run is
    Path        : League.Strings.Universal_String := +"result";
    Input_Path  : League.Strings.Universal_String := +"torrents";
    Total       : Ada.Containers.Count_Type := 0;
+
+   procedure Set_Peer_Id (Value : out SHA1);
+
+   -----------------
+   -- Set_Peer_Id --
+   -----------------
+
+   procedure Set_Peer_Id (Value : out SHA1) is
+      Settings : League.Settings.Settings;
+      Context  : GNAT.SHA1.Context;
+      Element  : League.Strings.Universal_String;
+      Vector   : League.Stream_Element_Vectors.Stream_Element_Vector;
+
+      Key : constant League.Strings.Universal_String := +"torrent/peer_id";
+      Now : constant String := Ada.Calendar.Formatting.Image
+        (Ada.Calendar.Clock);
+   begin
+      if Settings.Contains (Key) then
+         Element := League.Holders.Element (Settings.Value (Key));
+         Vector := League.Base_Codecs.From_Base_64 (Element);
+         Value := Vector.To_Stream_Element_Array;
+      else
+         GNAT.SHA1.Update (Context, Path.To_UTF_8_String);
+         GNAT.SHA1.Update (Context, Now);
+         GNAT.SHA1.Update (Context, GNAT.Sockets.Host_Name);
+
+         Value := GNAT.SHA1.Digest (Context);
+         Vector.Append (Value);
+         Element := League.Base_Codecs.To_Base_64 (Vector);
+         Settings.Set_Value (Key, League.Holders.To_Holder (Element));
+      end if;
+   end Set_Peer_Id;
 
    ---------------------
    -- Increment_Total --
@@ -125,6 +165,11 @@ begin
       return;
    end if;
 
+   League.Application.Set_Application_Name (+"Torrent Client");
+   League.Application.Set_Application_Version (+"0.1");
+   League.Application.Set_Organization_Name (+"Matreshka Project");
+   League.Application.Set_Organization_Domain (+"forge.ada-ru.org");
+
    Parse_Command_Line;
    Each_Torrents (Input_Path, Increment_Total'Access);
 
@@ -153,9 +198,11 @@ begin
          Context.Add_Metainfo_File (Meta);
       end Add;
 
+      Peer_Id     : Torrent.SHA1;
       Next_Update : Ada.Calendar.Time;
    begin
-      Context.Initialize (Path);
+      Set_Peer_Id (Peer_Id);
+      Context.Initialize (Peer_Id, Path);
       Each_Torrents (Input_Path, Add'Access);
       Context.Start (Next_Update);
 

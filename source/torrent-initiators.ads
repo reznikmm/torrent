@@ -13,7 +13,8 @@ limited with Torrent.Contexts;
 package Torrent.Initiators is
 
    task type Initiator
-     (Context : not null access Torrent.Contexts.Context;
+     (Port    : Natural;
+      Context : not null access Torrent.Contexts.Context;
       Recycle : not null access
         Torrent.Connections.Queue_Interfaces.Queue'Class)
    is

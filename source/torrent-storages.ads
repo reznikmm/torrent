@@ -29,6 +29,8 @@ package Torrent.Storages is
       File_Count : Ada.Containers.Count_Type) is
 
       procedure Initialize (Path : League.Strings.Universal_String);
+      function Is_Empty_Storage return Boolean;
+      --  No file exists or all files are empty
 
       entry Start_Reading;
       entry Stop_Reading;
@@ -44,6 +46,7 @@ package Torrent.Storages is
 
    private
 
+      Is_Empty   : Boolean := True;
       Reading    : Boolean := False;
       Files      : File_Index_Maps.Map (File_Count);
       Root_Path  : League.Strings.Universal_String;
