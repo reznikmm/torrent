@@ -28,6 +28,16 @@ package body Torrent.Metainfo_Files is
       return Self.Data.Announce;
    end Announce;
 
+   -------------------
+   -- Announce_List --
+   -------------------
+
+   not overriding function Announce_List
+     (Self : Metainfo_File) return String_Vector_Array is
+   begin
+      return Self.Data.Announces;
+   end Announce_List;
+
    ----------------
    -- File_Count --
    ----------------
@@ -146,6 +156,11 @@ package body Torrent.Metainfo_Files is
         (Index_Type   => Positive,
          Element_Type => File_Information);
 
+      package String_Vector_Vectors is new Ada.Containers.Vectors
+        (Index_Type   => Positive,
+         Element_Type => League.String_Vectors.Universal_String_Vector,
+         "="          => League.String_Vectors."=");
+
       function "+"
         (Text : Wide_Wide_String) return League.Strings.Universal_String
            renames League.Strings.To_Universal_String;
@@ -161,6 +176,9 @@ package body Torrent.Metainfo_Files is
 
       procedure Parse_String_List
         (Value : out League.String_Vectors.Universal_String_Vector);
+
+      procedure Parse_String_Vector_Vector
+        (Value : out String_Vector_Vectors.Vector);
 
       procedure Skip_Value;
       procedure Skip_List;
@@ -206,8 +224,8 @@ package body Torrent.Metainfo_Files is
          Path     : constant League.Strings.Universal_String := +"path";
          Pieces   : constant League.Strings.Universal_String := +"pieces";
 
---           Announce_List : constant League.Strings.Universal_String :=
---             +"announce-list";
+         Announce_List : constant League.Strings.Universal_String :=
+           +"announce-list";
          Piece_Length : constant League.Strings.Universal_String :=
            +"piece length";
       end Constants;
@@ -380,12 +398,13 @@ package body Torrent.Metainfo_Files is
       --------------------------
 
       function Parse_Top_Dictionary return Metainfo is
-         Index    : Ada.Streams.Stream_Element_Count;
-         Key      : League.Strings.Universal_String;
-         Announce : League.Strings.Universal_String;
-         Name     : League.Strings.Universal_String;
-         Files    : File_Vectors.Vector;
-         Pieces   : League.Stream_Element_Vectors.Stream_Element_Vector;
+         Index     : Ada.Streams.Stream_Element_Count;
+         Key       : League.Strings.Universal_String;
+         Announce  : League.Strings.Universal_String;
+         Name      : League.Strings.Universal_String;
+         Files     : File_Vectors.Vector;
+         Announces : String_Vector_Vectors.Vector;
+         Pieces    : League.Stream_Element_Vectors.Stream_Element_Vector;
 
          Piece_Length : Ada.Streams.Stream_Element_Count;
       begin
@@ -396,6 +415,9 @@ package body Torrent.Metainfo_Files is
 
             if Key = Constants.Announce then
                Parse_String (Announce);
+
+            elsif Key = Constants.Announce_List then
+               Parse_String_Vector_Vector (Announces);
 
             elsif Key = Constants.Info then
                Parse_Info (Name, Piece_Length, Files, Pieces);
@@ -413,14 +435,19 @@ package body Torrent.Metainfo_Files is
          end if;
 
          return Result : Metainfo :=
-           (Piece_Count  => Piece_Index (Pieces.Length) / 20,
-            File_Count   => Files.Last_Index,
-            Announce     => League.IRIs.From_Universal_String (Announce),
-            Name         => Name,
-            Piece_Length => Piece_Length,
-            Info_Hash    => GNAT.SHA1.Digest (Context),
-            others       => <>)
+           (Piece_Count    => Piece_Index (Pieces.Length) / 20,
+            File_Count     => Files.Last_Index,
+            Announce_Count => Announces.Last_Index,
+            Announce       => League.IRIs.From_Universal_String (Announce),
+            Name           => Name,
+            Piece_Length   => Piece_Length,
+            Info_Hash      => GNAT.SHA1.Digest (Context),
+            others         => <>)
          do
+            for J in 1 .. Announces.Last_Index loop
+               Result.Announces (J) := Announces (J);
+            end loop;
+
             for J in Result.Hashes'Range loop
                for K in SHA1'Range loop
                   Index :=
@@ -536,6 +563,26 @@ package body Torrent.Metainfo_Files is
 
          Expect (Character'Pos ('e'));
       end Parse_String_List;
+
+      --------------------------------
+      -- Parse_String_Vector_Vector --
+      --------------------------------
+
+      procedure Parse_String_Vector_Vector
+        (Value : out String_Vector_Vectors.Vector)
+      is
+         Item : League.String_Vectors.Universal_String_Vector;
+      begin
+         Value.Clear;
+         Expect (Character'Pos ('l'));
+
+         while Buffer (Next) /= Character'Pos ('e') loop
+            Parse_String_List (Item);
+            Value.Append (Item);
+         end loop;
+
+         Expect (Character'Pos ('e'));
+      end Parse_String_Vector_Vector;
 
       ---------------------
       -- Skip_Dictionary --

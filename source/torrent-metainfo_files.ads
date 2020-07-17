@@ -27,6 +27,14 @@ package Torrent.Metainfo_Files is
      (Self : Metainfo_File) return League.IRIs.IRI;
    --  The URL of the tracker.
 
+   type String_Vector_Array is array (Positive range <>) of
+     League.String_Vectors.Universal_String_Vector;
+
+   not overriding function Announce_List
+     (Self : Metainfo_File) return String_Vector_Array;
+   --  A list of tiers of announces.
+   --  See BEP - 12 "Multitracker Metadata Extension".
+
    not overriding function Name
      (Self : Metainfo_File) return League.Strings.Universal_String;
    --  The suggested name to save the file (or directory) as. It is purely
@@ -82,8 +90,9 @@ private
      of File_Information;
 
    type Metainfo
-     (Piece_Count : Piece_Index;
-      File_Count  : Positive) is
+     (Piece_Count    : Piece_Index;
+      File_Count     : Positive;
+      Announce_Count : Natural) is
    record
       Announce     : League.IRIs.IRI;
       Name         : League.Strings.Universal_String;
@@ -92,6 +101,7 @@ private
       Info_Hash    : SHA1;
       Hashes       : SHA1_Array (1 .. Piece_Count);
       Files        : File_Information_Array (1 .. File_Count);
+      Announces    : String_Vector_Array (1 .. Announce_Count);
    end record;
 
    type Metainfo_Access is access all Metainfo;

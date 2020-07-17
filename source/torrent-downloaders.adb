@@ -24,6 +24,12 @@ package body Torrent.Downloaders is
      (Self  : in out Downloader'Class;
       Event : Torrent.Trackers.Announcement_Kind);
 
+   procedure Send_Tracker_Request
+     (Self     : in out Downloader'Class;
+      Event    : Torrent.Trackers.Announcement_Kind;
+      Announce : League.IRIs.IRI;
+      Success  : out Boolean);
+
    -------------------------
    -- Check_Stored_Pieces --
    -------------------------
@@ -121,8 +127,48 @@ package body Torrent.Downloaders is
      (Self  : in out Downloader'Class;
       Event : Torrent.Trackers.Announcement_Kind)
    is
+      Success : Boolean := False;
+      List    : constant Torrent.Metainfo_Files.String_Vector_Array :=
+        Self.Meta.Announce_List;
+   begin
+      if List'Length = 0 then
+         Self.Send_Tracker_Request
+           (Event, Self.Meta.Announce, Success);
+      else
+         for Item of List loop
+            for J in 1 .. Item.Length loop
+               declare
+                  URL : League.IRIs.IRI;
+               begin
+                  URL := League.IRIs.From_Universal_String (Item (J));
+
+                  Self.Send_Tracker_Request
+                    (Event, URL, Success);
+
+                  if Success then
+                     return;
+                  end if;
+               exception
+                  when Constraint_Error =>
+                     null;
+               end;
+            end loop;
+         end loop;
+      end if;
+   end Send_Tracker_Request;
+
+   --------------------------
+   -- Send_Tracker_Request --
+   --------------------------
+
+   procedure Send_Tracker_Request
+     (Self     : in out Downloader'Class;
+      Event    : Torrent.Trackers.Announcement_Kind;
+      Announce : League.IRIs.IRI;
+      Success  : out Boolean)
+   is
       URL : constant League.IRIs.IRI := Trackers.Event_URL
-        (Tracker    => Self.Meta.Announce,
+        (Tracker    => Announce,
          Info_Hash  => Self.Meta.Info_Hash,
          Peer_Id    => Self.Peer_Id,
          Port       => Self.Port,
@@ -131,11 +177,24 @@ package body Torrent.Downloaders is
          Left       => Self.Left,
          Event      => Event);
 
-      Reply : constant AWS.Response.Data :=
-        AWS.Client.Get
-          (URL.To_Universal_String.To_UTF_8_String,
-           Follow_Redirection => True);
+      Reply : AWS.Response.Data;
    begin
+      if Announce.Get_Scheme.To_Wide_Wide_String not in "http" | "https" then
+         Success := False;
+         return;
+      else
+         begin
+            Reply :=
+              AWS.Client.Get
+                (URL.To_Universal_String.To_UTF_8_String,
+                 Follow_Redirection => True);
+         exception
+            when others =>
+               Success := False;
+               return;
+         end;
+      end if;
+
       pragma Debug
         (Torrent.Logs.Enabled,
          Torrent.Logs.Print
@@ -153,8 +212,12 @@ package body Torrent.Downloaders is
            (Torrent.Logs.Enabled,
             Torrent.Logs.Print (URL.To_Universal_String.To_UTF_8_String));
 
+         Success := False;
+
          return;
       elsif Self.Left = 0 or Event not in Torrent.Trackers.Started then
+         Success := True;
+
          return;
       end if;
 
@@ -186,6 +249,8 @@ package body Torrent.Downloaders is
                Self.Context.Connect (Self'Unchecked_Access, Address);
             end;
          end loop;
+
+         Success := True;
       end;
    end Send_Tracker_Request;
 
