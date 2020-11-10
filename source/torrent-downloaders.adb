@@ -4,15 +4,20 @@
 --  License-Filename: LICENSE
 -------------------------------------------------------------
 
+with Ada.Unchecked_Conversion;
+with Interfaces;
+
 with AWS.Response;
 with AWS.Client;
 with AWS.Messages;
 
 with League.IRIs;
+with League.String_Vectors;
 
 with Torrent.Contexts;
 with Torrent.Logs;
 with Torrent.Trackers;
+with Torrent.UDP_Tracker_Protocol;
 
 package body Torrent.Downloaders is
 
@@ -28,6 +33,12 @@ package body Torrent.Downloaders is
      (Self     : in out Downloader'Class;
       Event    : Torrent.Trackers.Announcement_Kind;
       Announce : League.IRIs.IRI;
+      Success  : out Boolean);
+
+   procedure Send_UDP_Tracker_Request
+     (Self     : in out Downloader'Class;
+      Event    : Torrent.Trackers.Announcement_Kind;
+      Announce : League.Strings.Universal_String;
       Success  : out Boolean);
 
    -------------------------
@@ -138,12 +149,19 @@ package body Torrent.Downloaders is
          for Item of List loop
             for J in 1 .. Item.Length loop
                declare
-                  URL : League.IRIs.IRI;
+                  URL : constant League.Strings.Universal_String := Item (J);
                begin
-                  URL := League.IRIs.From_Universal_String (Item (J));
-
-                  Self.Send_Tracker_Request
-                    (Event, URL, Success);
+                  if URL.Starts_With ("udp://") then
+                     Self.Send_UDP_Tracker_Request
+                       (Event,
+                        URL.Tail_From (7),
+                        Success);
+                  else
+                     Self.Send_Tracker_Request
+                       (Event,
+                        League.IRIs.From_Universal_String (URL),
+                        Success);
+                  end if;
 
                   if Success then
                      return;
@@ -253,6 +271,180 @@ package body Torrent.Downloaders is
          Success := True;
       end;
    end Send_Tracker_Request;
+
+   ------------------------------
+   -- Send_UDP_Tracker_Request --
+   ------------------------------
+
+   procedure Send_UDP_Tracker_Request
+     (Self     : in out Downloader'Class;
+      Event    : Torrent.Trackers.Announcement_Kind;
+      Announce : League.Strings.Universal_String;
+      Success  : out Boolean)
+   is
+      use Torrent.UDP_Tracker_Protocol;
+
+      Colon  : constant Natural := Announce.Last_Index (':');
+      Server : GNAT.Sockets.Socket_Type;
+      Addr   : GNAT.Sockets.Sock_Addr_Type;
+
+      Connect_Req : constant Connect_Request :=
+        (Action => 0, Transaction_Id => 1234, Protocol_Id => <>);
+
+      Announce_Req : Announce_Request;
+
+      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 1600);
+      Last    : Ada.Streams.Stream_Element_Count;
+      Connect : Interfaces.Unsigned_64;
+   begin
+      Success := False;
+
+      if Colon = 0 then
+         return;
+      else
+         begin
+            Addr.Addr := GNAT.Sockets.Inet_Addr
+              (Announce.Head_To (Colon - 1).To_UTF_8_String);
+            Addr.Port := GNAT.Sockets.Port_Type'Value
+              (Announce.Tail_From (Colon + 1).To_UTF_8_String);
+         exception
+            when Constraint_Error =>
+               return;
+         end;
+      end if;
+
+      GNAT.Sockets.Create_Socket
+        (Server, GNAT.Sockets.Family_Inet, GNAT.Sockets.Socket_Datagram);
+
+      GNAT.Sockets.Set_Socket_Option
+        (Server,
+         GNAT.Sockets.Socket_Level,
+         (GNAT.Sockets.Reuse_Address, True));
+
+      GNAT.Sockets.Set_Socket_Option
+        (Server,
+         GNAT.Sockets.Socket_Level,
+         (GNAT.Sockets.Receive_Timeout,
+          Timeout => 15.0));
+
+      GNAT.Sockets.Bind_Socket
+        (Server,
+         (GNAT.Sockets.Family_Inet,
+          GNAT.Sockets.Any_Inet_Addr,
+          GNAT.Sockets.Port_Type (Self.Port)));
+
+      begin
+         GNAT.Sockets.Send_Socket
+           (Server,
+            Cast (Connect_Req),
+            Last,
+            To     => Addr);
+         pragma Assert (Last = Raw_Connect_Request'Last);
+
+         GNAT.Sockets.Receive_Socket (Server, Buffer, Last, Addr);
+      exception
+         when GNAT.Sockets.Socket_Error =>
+            return;
+      end;
+
+      if Last >= 16 then
+         declare
+            use type Interfaces.Unsigned_32;
+            Response : constant Connect_Response :=
+              Cast (Buffer (1 .. 16));
+         begin
+            if Response.Action /= Connect_Req.Action
+              or else Response.Transaction_Id /= Connect_Req.Transaction_Id
+            then
+               return;
+            else
+               Connect := Response.Connection_Id;
+            end if;
+         end;
+      else
+         return;
+      end if;
+
+      Announce_Req :=
+        (Connection_Id  => Connect,
+         Action         => 1,  --  announce
+         Transaction_Id => 4321,
+         Info_Hash      => Self.Meta.Info_Hash,
+         Peer_Id        => Self.Peer_Id,
+         Downloaded     => Interfaces.Unsigned_64 (Self.Downloaded),
+         Left           => Interfaces.Unsigned_64 (Self.Left),
+         Uploaded       => Interfaces.Unsigned_64 (Self.Uploaded),
+         Event          => Cast_Event (Event),
+         IP_Address     => <>,
+         Key            => 0,
+         Num_Want       => <>,
+         Port           => Interfaces.Unsigned_16 (Self.Port));
+
+      begin
+         GNAT.Sockets.Send_Socket
+           (Server,
+            Cast (Announce_Req),
+            Last,
+            To => Addr);
+         pragma Assert (Last = Raw_Announce_Request'Last);
+
+         GNAT.Sockets.Receive_Socket (Server, Buffer, Last, Addr);
+      exception
+         when GNAT.Sockets.Socket_Error =>
+            return;
+      end;
+
+      if Last >= Raw_Announce_Response'Last then
+         declare
+            use type Interfaces.Unsigned_32;
+            Response : constant Announce_Response :=
+              Cast (Buffer (1 .. Raw_Announce_Response'Last));
+         begin
+            if Response.Action /= Announce_Req.Action
+              or else Response.Transaction_Id /= Announce_Req.Transaction_Id
+            then
+               return;
+            end if;
+         end;
+      else
+         return;
+      end if;
+
+      for J in 0 .. (Last - Raw_Announce_Response'Last) / 6 loop
+         declare
+            Peer    : constant Peer_Address := Cast
+              (Buffer (21 + J * 6 .. 26 + J * 6));
+            X1      : constant String := Peer.IP_Address (1)'Image;
+            X2      : String := Peer.IP_Address (2)'Image;
+            X3      : String := Peer.IP_Address (3)'Image;
+            X4      : String := Peer.IP_Address (4)'Image;
+
+            Address : GNAT.Sockets.Sock_Addr_Type;
+
+         begin
+            X2 (1) := '.';
+            X3 (1) := '.';
+            X4 (1) := '.';
+
+            Address :=
+              (Family => GNAT.Sockets.Family_Inet,
+               Addr   => GNAT.Sockets.Inet_Addr
+                 (X1 (2 .. X1'Last) & X2 & X3 & X4),
+               Port   => GNAT.Sockets.Port_Type (Peer.Port));
+
+            pragma Debug
+              (Torrent.Logs.Enabled,
+               Torrent.Logs.Print
+                 ((J'Img)
+                  & " Initialize connection to "
+                  & GNAT.Sockets.Image (Address)));
+
+            Self.Context.Connect (Self'Unchecked_Access, Address);
+         end;
+      end loop;
+
+      Success := True;
+   end Send_UDP_Tracker_Request;
 
    -----------
    -- Start --
